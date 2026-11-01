@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider paths used to hand files to other apps (Open, Play) and to the package installer (Install). -->
+<paths>
+    <external-path
+        name="external"
+        path="." />
+    <root-path
+        name="root"
+        path="." />
+</paths>

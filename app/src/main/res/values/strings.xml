@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Identity -->
+    <string name="app_name" translatable="false">Flit</string>
+    <string name="lang_english" translatable="false">English</string>
+    <string name="lang_spanish" translatable="false">Español</string>
+
+    <!-- Generic buttons (floating / inline) -->
+    <string name="btn_save">Save</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="btn_clear">Clear</string>
+    <string name="btn_open">Open</string>
+    <string name="btn_play">Play</string>
+    <string name="btn_install">Install</string>
+    <string name="btn_extract">Extract</string>
+    <string name="btn_retry">Retry</string>
+    <string name="btn_pause">Pause</string>
+    <string name="btn_resume">Resume</string>
+    <string name="btn_stop">Stop</string>
+    <string name="btn_delete">Delete</string>
+
+    <!-- Dialog buttons -->
+    <string name="dialog_ok">OK</string>
+    <string name="dialog_cancel">CANCEL</string>
+    <string name="dialog_delete">DELETE</string>
+    <string name="dialog_delete_n">DELETE %1$d</string>
+    <string name="btn_not_now">NOT NOW</string>
+    <string name="btn_enable_location">ENABLE LOCATION</string>
+    <string name="btn_grant">GRANT ACCESS</string>
+    <string name="btn_allow">ALLOW</string>
+    <string name="btn_open_settings">OPEN SETTINGS</string>
+    <string name="btn_turn_on">TURN ON</string>
+    <string name="btn_accept">ACCEPT</string>
+    <string name="btn_decline">DECLINE</string>
+    <string name="btn_search_again">SEARCH AGAIN</string>
+    <string name="btn_battery_settings">BATTERY SETTINGS</string>
+
+    <!-- Content descriptions -->
+    <string name="cd_back">Back</string>
+    <string name="cd_minimize">Minimize</string>
+    <string name="cd_close">Close</string>
+    <string name="cd_settings">Settings</string>
+    <string name="cd_avatar">Profile picture</string>
+    <string name="cd_storage_tab">Internal storage</string>
+    <string name="cd_folder_up">Up one folder</string>
+
+    <!-- Home -->
+    <string name="home_sender">Sender</string>
+    <string name="home_receiver">Receiver</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_profile">Custom profile</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_rate">Rate</string>
+    <string name="theme_system">System</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+
+    <!-- Profile -->
+    <string name="profile_title">Custom profile</string>
+    <string name="profile_name_label">Device name</string>
+    <string name="profile_name_hint">Name shown to nearby devices</string>
+    <string name="profile_pick_picture">Choose a picture</string>
+    <string name="profile_pick_failed">Could not load that picture.</string>
+    <string name="profile_saved">Profile saved</string>
+
+    <!-- Permissions and system state -->
+    <string name="perm_storage_title">Storage access</string>
+    <string name="perm_storage_msg">Flit needs access to your files to browse and share them and to save received files.</string>
+    <string name="perm_storage_msg_all">Allow Flit to manage all files in Android Settings. Flit only reads the files you choose to send and saves received files in Download/Flit.</string>
+    <string name="perm_location_title">LOCATION SERVICES</string>
+    <string name="perm_location_msg">Location services must be enabled for nearby Wi-Fi Direct discovery. Flit does not track or store your location.</string>
+    <string name="perm_location_runtime_msg">Android requires the Location permission for nearby Wi-Fi Direct discovery. Flit does not track or store your location.</string>
+    <string name="perm_nearby_title">NEARBY DEVICES</string>
+    <string name="perm_nearby_msg">Flit needs permission to find and connect to nearby devices using Wi-Fi Direct.</string>
+    <string name="perm_required_title">Permission required</string>
+    <string name="perm_required_msg">This feature stays unavailable until you grant the permission in Android Settings.</string>
+    <string name="perm_notif_off">Notifications are off. You may miss transfer requests while Flit is in the background.</string>
+    <string name="perm_files_needed">Allow file access to browse your files.</string>
+    <string name="wifi_off_title">Wi-Fi is off</string>
+    <string name="wifi_off_msg">Turn on Wi-Fi to find nearby devices. No internet connection is needed.</string>
+
+    <!-- Sender -->
+    <string name="tab_history">History</string>
+    <string name="tab_apps">Apps</string>
+    <string name="tab_images">Images</string>
+    <string name="tab_videos">Videos</string>
+    <string name="tab_audios">Audios</string>
+    <string name="storage_summary">%1$s/%2$s</string>
+    <string name="send_count">Send %1$d</string>
+    <string name="send_to_count">SEND TO %1$d</string>
+    <string name="hist_received">Received</string>
+    <string name="hist_sent">Sent</string>
+    <string name="hist_empty">Nothing here yet</string>
+    <string name="hist_file_missing">File no longer available</string>
+    <string name="status_installed">INSTALLED</string>
+    <string name="apps_system">System apps</string>
+    <string name="apps_apk_files">APK files</string>
+    <string name="apk_split">Split APK</string>
+    <string name="media_empty">Nothing to show</string>
+    <string name="folder_empty">This folder is empty</string>
+    <string name="folder_restricted">Restricted by Android</string>
+
+    <!-- Receiver and discovery -->
+    <string name="receiver_discoverable">DISCOVERABLE</string>
+    <string name="receiver_simultaneous">Simultaneous transfers</string>
+    <string name="discovery_title">Nearby receivers</string>
+    <string name="discovery_searching">Searching…</string>
+    <string name="discovery_none">No receivers found</string>
+    <string name="discovery_connecting">Connecting…</string>
+    <string name="discovery_waiting_accept">Waiting for %1$s to accept…</string>
+
+    <!-- Incoming request -->
+    <string name="incoming_title">INCOMING TRANSFER</string>
+    <string name="incoming_message">%1$s wants to send you files.</string>
+    <string name="incoming_summary">%1$s · %2$s</string>
+    <plurals name="incoming_queue">
+        <item quantity="one">%1$d more request waiting</item>
+        <item quantity="other">%1$d more requests waiting</item>
+    </plurals>
+    <plurals name="files_count">
+        <item quantity="one">%1$d file</item>
+        <item quantity="other">%1$d files</item>
+    </plurals>
+
+    <!-- Transfer -->
+    <string name="transfer_title">Transfer</string>
+    <string name="transfer_receiving_from">Receiving from %1$s</string>
+    <string name="transfer_sending_to">Sending to %1$s</string>
+    <string name="transfer_percent">%1$d%%</string>
+    <string name="progress_of">%1$s / %2$s</string>
+    <string name="status_waiting">WAITING</string>
+    <string name="status_sending">SENDING</string>
+    <string name="status_sent">SENT</string>
+    <string name="status_receiving">RECEIVING</string>
+    <string name="status_received">RECEIVED</string>
+    <string name="status_failed">FAILED</string>
+    <string name="status_exists">ALREADY EXISTS</string>
+    <string name="status_paused">PAUSED</string>
+
+    <!-- Storage exhaustion -->
+    <string name="storage_full_title">RUN OUT OF STORAGE</string>
+    <string name="storage_full_msg">The transfer is paused. Free up space to continue. Files larger than 50 MB are listed below, largest first.</string>
+    <string name="storage_full_need">Needed: %1$s · Free: %2$s</string>
+    <string name="storage_full_none">No files larger than 50 MB were found.</string>
+    <string name="storage_still_low">There is still not enough space. Select more files to delete.</string>
+    <string name="delete_confirm_title">Delete selected files?</string>
+    <plurals name="delete_confirm_msg">
+        <item quantity="one">%1$d file (%2$s) will be permanently deleted. This cannot be undone.</item>
+        <item quantity="other">%1$d files (%2$s) will be permanently deleted. This cannot be undone.</item>
+    </plurals>
+
+    <!-- Notification channels -->
+    <string name="ch_requests">Transfer requests</string>
+    <string name="ch_progress">Transfer progress</string>
+    <string name="ch_results">Transfer results</string>
+
+    <!-- Notifications -->
+    <string name="notif_receiver_title">Flit is discoverable</string>
+    <string name="notif_receiver_text">Waiting for incoming transfers</string>
+    <string name="notif_incoming_title">Incoming transfer</string>
+    <string name="notif_incoming_text">%1$s wants to send you files</string>
+    <string name="notif_receiving_title">Receiving files</string>
+    <string name="notif_sending_title">Sending files</string>
+    <string name="notif_progress_text">%1$d%% complete</string>
+    <string name="notif_choose_title">Receivers found</string>
+    <string name="notif_choose_text">Return to Flit to choose where to send.</string>
+    <string name="notif_done_title">Transfer complete</string>
+    <plurals name="notif_done_text">
+        <item quantity="one">%1$d file transferred</item>
+        <item quantity="other">%1$d files transferred</item>
+    </plurals>
+    <string name="notif_failed_title">Some files failed</string>
+    <plurals name="notif_failed_text">
+        <item quantity="one">%1$d file failed. Open Flit to retry.</item>
+        <item quantity="other">%1$d files failed. Open Flit to retry.</item>
+    </plurals>
+    <string name="notif_interrupted_title">Connection lost</string>
+    <string name="notif_interrupted_text">Completed files were kept. Open Flit for details.</string>
+    <string name="notif_storage_title">Out of storage</string>
+    <string name="notif_storage_text">The transfer is paused. Free up space to continue.</string>
+    <string name="notif_resumed_title">Transfer resumed</string>
+    <string name="notif_resumed_text">Enough space is available again.</string>
+    <string name="notif_stopped_title">Transfer stopped by Android</string>
+    <string name="notif_stopped_text">Open Flit for details.</string>
+
+    <!-- Recovery after Android stops the app -->
+    <string name="recovery_title">TRANSFER STOPPED</string>
+    <string name="recovery_msg">Android stopped Flit while a transfer was running. Completed files were kept, and unfinished files can be resumed. To reduce this, allow Flit to run in the background.</string>
+    <string name="battery_note">Menu names may differ on your device.</string>
+    <string name="battery_generic">Open Settings → Apps → Flit → Battery and choose Unrestricted (or turn off battery optimization for Flit).</string>
+    <string name="battery_samsung">Settings → Apps → Flit → Battery → Unrestricted. Also remove Flit from Settings → Battery → Background usage limits → Sleeping apps.</string>
+    <string name="battery_xiaomi">Settings → Apps → Manage apps → Flit → turn on Autostart and set Battery saver to No restrictions.</string>
+    <string name="battery_huawei">Settings → Battery → App launch → Flit → turn off automatic management, then allow Auto-launch, Secondary launch and Run in background.</string>
+    <string name="battery_oppo">Settings → Battery → Flit (or App battery management) → allow background activity and auto-launch.</string>
+
+    <!-- Errors -->
+    <string name="err_p2p_unsupported">This device does not support Wi-Fi Direct.</string>
+    <string name="err_connection_failed">Could not connect. Please try again.</string>
+    <string name="err_generic">Something went wrong.</string>
+
+    <!-- Developer tuning panel (hidden, English only, removed before the final release) -->
+    <string name="dev_title" translatable="false">Developer tuning</string>
+    <string name="dev_copy" translatable="false">Copy last results</string>
+
+</resources>

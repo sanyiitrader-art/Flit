@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Flit color tokens: DARK. Same names as the light set in values/themes.xml. -->
+    <color name="flit_bg">#0A0A0A</color>
+    <color name="flit_surface">#171717</color>
+    <color name="flit_surface2">#222222</color>
+    <color name="flit_surface3">#2C2C2C</color>
+    <color name="flit_text">#FFFFFF</color>
+    <color name="flit_text2">#A0A0A0</color>
+    <color name="flit_border">#303030</color>
+    <color name="flit_accent">#B05D42</color>
+    <color name="flit_on_accent">#FFFFFF</color>
+
+    <style name="Theme.Flit" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/flit_bg</item>
+        <item name="android:colorBackground">@color/flit_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarDividerColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:windowSplashScreenBackground">@color/flit_bg</item>
+        <item name="android:textColorPrimary">@color/flit_text</item>
+        <item name="android:textColorSecondary">@color/flit_text2</item>
+        <item name="android:textColorHint">@color/flit_text2</item>
+        <item name="android:colorAccent">@color/flit_accent</item>
+        <item name="android:colorControlActivated">@color/flit_accent</item>
+        <item name="android:colorControlNormal">@color/flit_text2</item>
+        <item name="android:colorControlHighlight">@color/flit_surface3</item>
+    </style>
+
+    <style name="Theme.Flit.Dialog" parent="android:Theme.Material.Dialog.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.6</item>
+        <item name="android:textColorPrimary">@color/flit_text</item>
+        <item name="android:textColorSecondary">@color/flit_text2</item>
+        <item name="android:colorAccent">@color/flit_accent</item>
+        <item name="android:colorControlActivated">@color/flit_accent</item>
+        <item name="android:colorControlNormal">@color/flit_text2</item>
+    </style>
+
+</resources>

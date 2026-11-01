@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Botones genéricos -->
+    <string name="btn_save">Guardar</string>
+    <string name="btn_cancel">Cancelar</string>
+    <string name="btn_clear">Borrar</string>
+    <string name="btn_open">Abrir</string>
+    <string name="btn_play">Reproducir</string>
+    <string name="btn_install">Instalar</string>
+    <string name="btn_extract">Extraer</string>
+    <string name="btn_retry">Reintentar</string>
+    <string name="btn_pause">Pausar</string>
+    <string name="btn_resume">Reanudar</string>
+    <string name="btn_stop">Detener</string>
+    <string name="btn_delete">Eliminar</string>
+
+    <!-- Botones de diálogo -->
+    <string name="dialog_ok">ACEPTAR</string>
+    <string name="dialog_cancel">CANCELAR</string>
+    <string name="dialog_delete">ELIMINAR</string>
+    <string name="dialog_delete_n">ELIMINAR %1$d</string>
+    <string name="btn_not_now">AHORA NO</string>
+    <string name="btn_enable_location">ACTIVAR UBICACIÓN</string>
+    <string name="btn_grant">CONCEDER ACCESO</string>
+    <string name="btn_allow">PERMITIR</string>
+    <string name="btn_open_settings">ABRIR AJUSTES</string>
+    <string name="btn_turn_on">ACTIVAR</string>
+    <string name="btn_accept">ACEPTAR</string>
+    <string name="btn_decline">RECHAZAR</string>
+    <string name="btn_search_again">BUSCAR DE NUEVO</string>
+    <string name="btn_battery_settings">AJUSTES DE BATERÍA</string>
+
+    <!-- Descripciones de contenido -->
+    <string name="cd_back">Atrás</string>
+    <string name="cd_minimize">Minimizar</string>
+    <string name="cd_close">Cerrar</string>
+    <string name="cd_settings">Ajustes</string>
+    <string name="cd_avatar">Foto de perfil</string>
+    <string name="cd_storage_tab">Almacenamiento interno</string>
+    <string name="cd_folder_up">Subir una carpeta</string>
+
+    <!-- Inicio -->
+    <string name="home_sender">Emisor</string>
+    <string name="home_receiver">Receptor</string>
+
+    <!-- Ajustes -->
+    <string name="settings_title">Ajustes</string>
+    <string name="settings_profile">Perfil personalizado</string>
+    <string name="settings_language">Idioma</string>
+    <string name="settings_theme">Tema</string>
+    <string name="settings_rate">Valorar</string>
+    <string name="theme_system">Sistema</string>
+    <string name="theme_light">Claro</string>
+    <string name="theme_dark">Oscuro</string>
+
+    <!-- Perfil -->
+    <string name="profile_title">Perfil personalizado</string>
+    <string name="profile_name_label">Nombre del dispositivo</string>
+    <string name="profile_name_hint">Nombre visible para dispositivos cercanos</string>
+    <string name="profile_pick_picture">Elegir una imagen</string>
+    <string name="profile_pick_failed">No se pudo cargar esa imagen.</string>
+    <string name="profile_saved">Perfil guardado</string>
+
+    <!-- Permisos y estado del sistema -->
+    <string name="perm_storage_title">Acceso al almacenamiento</string>
+    <string name="perm_storage_msg">Flit necesita acceso a tus archivos para explorarlos, compartirlos y guardar los archivos recibidos.</string>
+    <string name="perm_storage_msg_all">Permite que Flit administre todos los archivos en los ajustes de Android. Flit solo lee los archivos que eliges enviar y guarda los recibidos en Download/Flit.</string>
+    <string name="perm_location_title">SERVICIOS DE UBICACIÓN</string>
+    <string name="perm_location_msg">Los servicios de ubicación deben estar activados para detectar dispositivos cercanos con Wi-Fi Direct. Flit no rastrea ni guarda tu ubicación.</string>
+    <string name="perm_location_runtime_msg">Android exige el permiso de ubicación para detectar dispositivos cercanos con Wi-Fi Direct. Flit no rastrea ni guarda tu ubicación.</string>
+    <string name="perm_nearby_title">DISPOSITIVOS CERCANOS</string>
+    <string name="perm_nearby_msg">Flit necesita permiso para encontrar y conectarse a dispositivos cercanos mediante Wi-Fi Direct.</string>
+    <string name="perm_required_title">Permiso necesario</string>
+    <string name="perm_required_msg">Esta función no estará disponible hasta que concedas el permiso en los ajustes de Android.</string>
+    <string name="perm_notif_off">Las notificaciones están desactivadas. Podrías perder solicitudes de transferencia mientras Flit está en segundo plano.</string>
+    <string name="perm_files_needed">Permite el acceso a archivos para explorar tus archivos.</string>
+    <string name="wifi_off_title">El Wi-Fi está desactivado</string>
+    <string name="wifi_off_msg">Activa el Wi-Fi para encontrar dispositivos cercanos. No se necesita conexión a internet.</string>
+
+    <!-- Emisor -->
+    <string name="tab_history">Historial</string>
+    <string name="tab_apps">Apps</string>
+    <string name="tab_images">Imágenes</string>
+    <string name="tab_videos">Vídeos</string>
+    <string name="tab_audios">Audios</string>
+    <string name="storage_summary">%1$s/%2$s</string>
+    <string name="send_count">Enviar %1$d</string>
+    <string name="send_to_count">ENVIAR A %1$d</string>
+    <string name="hist_received">Recibidos</string>
+    <string name="hist_sent">Enviados</string>
+    <string name="hist_empty">Aún no hay nada aquí</string>
+    <string name="hist_file_missing">El archivo ya no está disponible</string>
+    <string name="status_installed">INSTALADA</string>
+    <string name="apps_system">Apps del sistema</string>
+    <string name="apps_apk_files">Archivos APK</string>
+    <string name="apk_split">APK dividido</string>
+    <string name="media_empty">Nada que mostrar</string>
+    <string name="folder_empty">Esta carpeta está vacía</string>
+    <string name="folder_restricted">Restringido por Android</string>
+
+    <!-- Receptor y búsqueda -->
+    <string name="receiver_discoverable">VISIBLE</string>
+    <string name="receiver_simultaneous">Transferencias simultáneas</string>
+    <string name="discovery_title">Receptores cercanos</string>
+    <string name="discovery_searching">Buscando…</string>
+    <string name="discovery_none">No se encontraron receptores</string>
+    <string name="discovery_connecting">Conectando…</string>
+    <string name="discovery_waiting_accept">Esperando que %1$s acepte…</string>
+
+    <!-- Solicitud entrante -->
+    <string name="incoming_title">TRANSFERENCIA ENTRANTE</string>
+    <string name="incoming_message">%1$s quiere enviarte archivos.</string>
+    <string name="incoming_summary">%1$s · %2$s</string>
+    <plurals name="incoming_queue">
+        <item quantity="one">%1$d solicitud más en espera</item>
+        <item quantity="many">%1$d solicitudes más en espera</item>
+        <item quantity="other">%1$d solicitudes más en espera</item>
+    </plurals>
+    <plurals name="files_count">
+        <item quantity="one">%1$d archivo</item>
+        <item quantity="many">%1$d archivos</item>
+        <item quantity="other">%1$d archivos</item>
+    </plurals>
+
+    <!-- Transferencia -->
+    <string name="transfer_title">Transferencia</string>
+    <string name="transfer_receiving_from">Recibiendo de %1$s</string>
+    <string name="transfer_sending_to">Enviando a %1$s</string>
+    <string name="transfer_percent">%1$d%%</string>
+    <string name="progress_of">%1$s / %2$s</string>
+    <string name="status_waiting">EN ESPERA</string>
+    <string name="status_sending">ENVIANDO</string>
+    <string name="status_sent">ENVIADO</string>
+    <string name="status_receiving">RECIBIENDO</string>
+    <string name="status_received">RECIBIDO</string>
+    <string name="status_failed">ERROR</string>
+    <string name="status_exists">YA EXISTE</string>
+    <string name="status_paused">EN PAUSA</string>
+
+    <!-- Almacenamiento agotado -->
+    <string name="storage_full_title">SIN ESPACIO</string>
+    <string name="storage_full_msg">La transferencia está en pausa. Libera espacio para continuar. Se muestran los archivos de más de 50 MB, del más grande al más pequeño.</string>
+    <string name="storage_full_need">Necesario: %1$s · Libre: %2$s</string>
+    <string name="storage_full_none">No se encontraron archivos de más de 50 MB.</string>
+    <string name="storage_still_low">Todavía no hay espacio suficiente. Selecciona más archivos para eliminar.</string>
+    <string name="delete_confirm_title">¿Eliminar los archivos seleccionados?</string>
+    <plurals name="delete_confirm_msg">
+        <item quantity="one">Se eliminará de forma permanente %1$d archivo (%2$s). Esta acción no se puede deshacer.</item>
+        <item quantity="many">Se eliminarán de forma permanente %1$d archivos (%2$s). Esta acción no se puede deshacer.</item>
+        <item quantity="other">Se eliminarán de forma permanente %1$d archivos (%2$s). Esta acción no se puede deshacer.</item>
+    </plurals>
+
+    <!-- Canales de notificación -->
+    <string name="ch_requests">Solicitudes de transferencia</string>
+    <string name="ch_progress">Progreso de transferencia</string>
+    <string name="ch_results">Resultados de transferencia</string>
+
+    <!-- Notificaciones -->
+    <string name="notif_receiver_title">Flit está visible</string>
+    <string name="notif_receiver_text">Esperando transferencias entrantes</string>
+    <string name="notif_incoming_title">Transferencia entrante</string>
+    <string name="notif_incoming_text">%1$s quiere enviarte archivos</string>
+    <string name="notif_receiving_title">Recibiendo archivos</string>
+    <string name="notif_sending_title">Enviando archivos</string>
+    <string name="notif_progress_text">%1$d%% completado</string>
+    <string name="notif_choose_title">Receptores encontrados</string>
+    <string name="notif_choose_text">Vuelve a Flit para elegir a quién enviar.</string>
+    <string name="notif_done_title">Transferencia completada</string>
+    <plurals name="notif_done_text">
+        <item quantity="one">%1$d archivo transferido</item>
+        <item quantity="many">%1$d archivos transferidos</item>
+        <item quantity="other">%1$d archivos transferidos</item>
+    </plurals>
+    <string name="notif_failed_title">Algunos archivos fallaron</string>
+    <plurals name="notif_failed_text">
+        <item quantity="one">%1$d archivo falló. Abre Flit para reintentar.</item>
+        <item quantity="many">%1$d archivos fallaron. Abre Flit para reintentar.</item>
+        <item quantity="other">%1$d archivos fallaron. Abre Flit para reintentar.</item>
+    </plurals>
+    <string name="notif_interrupted_title">Conexión perdida</string>
+    <string name="notif_interrupted_text">Se conservaron los archivos completados. Abre Flit para ver los detalles.</string>
+    <string name="notif_storage_title">Sin espacio</string>
+    <string name="notif_storage_text">La transferencia está en pausa. Libera espacio para continuar.</string>
+    <string name="notif_resumed_title">Transferencia reanudada</string>
+    <string name="notif_resumed_text">Vuelve a haber espacio suficiente.</string>
+    <string name="notif_stopped_title">Android detuvo la transferencia</string>
+    <string name="notif_stopped_text">Abre Flit para ver los detalles.</string>
+
+    <!-- Recuperación tras la detención por Android -->
+    <string name="recovery_title">TRANSFERENCIA DETENIDA</string>
+    <string name="recovery_msg">Android detuvo Flit mientras había una transferencia en curso. Los archivos completados se conservaron y los incompletos pueden reanudarse. Para reducir esto, permite que Flit se ejecute en segundo plano.</string>
+    <string name="battery_note">Los nombres de los menús pueden variar en tu dispositivo.</string>
+    <string name="battery_generic">Abre Ajustes → Apps → Flit → Batería y elige Sin restricciones (o desactiva la optimización de batería para Flit).</string>
+    <string name="battery_samsung">Ajustes → Aplicaciones → Flit → Batería → Sin restricciones. Quita también Flit de Ajustes → Batería → Límites de uso en segundo plano → Apps en suspensión.</string>
+    <string name="battery_xiaomi">Ajustes → Aplicaciones → Administrar aplicaciones → Flit → activa Inicio automático y configura Ahorro de batería en Sin restricciones.</string>
+    <string name="battery_huawei">Ajustes → Batería → Inicio de aplicaciones → Flit → desactiva la gestión automática y permite Inicio automático, Inicio secundario y Ejecutar en segundo plano.</string>
+    <string name="battery_oppo">Ajustes → Batería → Flit (o Gestión de batería de apps) → permite la actividad en segundo plano y el inicio automático.</string>
+
+    <!-- Errores -->
+    <string name="err_p2p_unsupported">Este dispositivo no es compatible con Wi-Fi Direct.</string>
+    <string name="err_connection_failed">No se pudo conectar. Inténtalo de nuevo.</string>
+    <string name="err_generic">Algo salió mal.</string>
+
+</resources>
