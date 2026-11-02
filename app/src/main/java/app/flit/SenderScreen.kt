@@ -56,6 +56,7 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener {
     private val indicator = Indicator(act)
     private val pager = ViewPager2(act)
     private val send = Pill(act, "", true)
+    private var storageGen = 0
 
     init {
         Sel.clear() // every Sender session starts with an empty selection
@@ -155,6 +156,7 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener {
                 it.setMargins(0, 0, Ui.dp(16), Ui.dp(16))
             }
         )
+        showStorage(lastUsed, lastTotal) // last known value right away, refreshed below in the background
         updateSend()
     }
 
@@ -191,11 +193,26 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener {
         }
     }
 
-    private fun updateStorage() {
-        val (used, total) = Files.storage()
+    private fun showStorage(used: Long, total: Long) {
+        if (total <= 0L) return
         val pr = Types.storagePair(used, total)
         summary.text = act.getString(R.string.storage_summary, pr.first, pr.second)
-        bar.progress = if (total > 0) used.toFloat() / total.toFloat() else 0f
+        bar.progress = used.toFloat() / total.toFloat()
+    }
+
+    /** Reads the storage figures off the UI thread; stale results are dropped. */
+    private fun updateStorage() {
+        val g = ++storageGen
+        FlitApp.io.execute {
+            val (used, total) = Files.storage()
+            FlitApp.main.post {
+                if (g == storageGen) {
+                    lastUsed = used
+                    lastTotal = total
+                    showStorage(used, total)
+                }
+            }
+        }
     }
 
     private fun updateSend() {
@@ -224,5 +241,10 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener {
     override fun onDetachedFromWindow() {
         Sel.removeListener(this)
         super.onDetachedFromWindow()
+    }
+
+    private companion object {
+        var lastUsed = 0L
+        var lastTotal = 0L
     }
 }
