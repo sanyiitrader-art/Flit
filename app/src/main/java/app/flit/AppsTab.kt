@@ -32,7 +32,7 @@ class HeaderCell(c: Context) : LinearLayout(c) {
     }
 }
 
-/** App or APK cell: icon, name (2 lines), optional "Split APK" note, selection check at the top-right. */
+/** App or APK cell: icon, name (2 lines), size line under the name, selection check at the top-right. */
 class AppCell(c: Context) : FrameLayout(c) {
 
     val icon = ImageView(c)
@@ -77,7 +77,8 @@ class AppCell(c: Context) : FrameLayout(c) {
 
 /**
  * Apps tab: four-column grid. Order: installed user apps, APK files found in storage,
- * then a collapsible (collapsed by default) System apps section.
+ * then a collapsible (collapsed by default) System apps section. Every cell shows its size under
+ * its name (for split-APK apps: the total of all parts).
  *
  * Loading is progressive: user apps and the APK scan run in parallel on a dedicated pool and each
  * appears as soon as it is ready. System apps are only labelled when their section is opened.
@@ -358,13 +359,14 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener, Live {
             val app = r.app
             if (app != null) {
                 cell.name.text = app.label
-                cell.note.text = context.getString(R.string.apk_split)
-                cell.note.visibility = if (app.splits.isNotEmpty()) View.VISIBLE else View.GONE
+                cell.note.text = Types.size(app.size)
+                cell.note.visibility = View.VISIBLE
                 Thumbs.load(cell.icon, "app:${app.pkg}:${app.path}", cell.ph, 10) { Thumbs.appIcon(app.pkg, px) }
             } else {
                 val f = r.apk!!
                 cell.name.text = f.name.substringBeforeLast('.')
-                cell.note.visibility = View.GONE
+                cell.note.text = Types.size(f.size)
+                cell.note.visibility = View.VISIBLE
                 Thumbs.load(cell.icon, "apk:${f.path}:${f.size}", cell.ph, 10) { Thumbs.apkIcon(f.path, px) }
             }
             cell.mark(selected(r))
