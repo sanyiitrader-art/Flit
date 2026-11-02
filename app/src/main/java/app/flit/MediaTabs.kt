@@ -162,16 +162,21 @@ class ImageCell(c: Context) : FrameLayout(c) {
 /**
  * Images (3-column grid), Videos and Audios (card lists) share this view. Media is read from
  * MediaStore with ONE query that streams its rows: the first 150 appear almost immediately and the
- * rest are appended in chunks. It reloads only when MediaStore reports a change for this media kind
- * (or after 5 minutes as a safety net), not on every tab switch. Needs all-files access; without
- * it a notice with a grant button is shown instead.
+ * rest are appended in chunks.
+ *
+ * Live updates: when MediaStore reports a change for this kind and the tab is on screen, it reloads
+ * by itself. A reload of an already-shown list is collected off-screen and swapped in at the end, so
+ * the list never flickers or jumps. A change that happens while the tab is hidden is detected the
+ * next time it is shown (and by a 5-minute safety net). Needs all-files access; without it a notice
+ * with a grant button is shown instead.
  */
-class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener {
+class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener, Live {
 
     private val rv = RecyclerView(c)
     private val notice = Notice(c)
     private val adapter = Ad()
     private var data: MutableList<Media> = ArrayList()
+    private var staging: MutableList<Media>? = null
     private var gen = 0
     private var loaded = false
     private var loading = false
@@ -197,6 +202,7 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
             loaded = false
             loading = false
             loadedVer = -1
+            staging = null
             if (data.isNotEmpty()) {
                 data = ArrayList()
                 adapter.notifyDataSetChanged()
@@ -207,19 +213,26 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
             ) { context.findActivity()?.let { Perms.requestStorage(it) } }
             return
         }
-        Files.watchMedia()
+        Files.watch()
         if (loading) return
         val now = System.currentTimeMillis()
-        val changed = Files.mediaVersion(kind) != loadedVer
+        val changed = Files.version(kind) != loadedVer
         if (!loaded || changed || now - loadedAt > 300_000L) load() else updateNotice()
+    }
+
+    /** Debounced change from MediaStore. Reloads only if this tab is on screen. */
+    override fun onLive(kind: Int) {
+        if (kind == this.kind && isShown && !loading && Perms.hasStorage()) load()
     }
 
     private fun load() {
         val g = ++gen
-        val ver = Files.mediaVersion(kind)
+        val ver = Files.version(kind)
         loading = true
-        firstPending = true
-        notice.hide()
+        val silent = loaded && data.isNotEmpty()
+        firstPending = !silent
+        staging = if (silent) ArrayList() else null
+        if (!silent) notice.hide()
         Files.pool.execute {
             try {
                 Files.streamMedia(kind, { g != gen }) { chunk ->
@@ -229,23 +242,35 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
             }
             FlitApp.main.post {
                 if (g == gen) {
-                    if (firstPending) { // the query returned nothing: replace any older rows
+                    val st = staging
+                    if (st != null) {
+                        staging = null
+                        data = st
+                        adapter.notifyDataSetChanged()
+                    } else if (firstPending) { // the query returned nothing: replace any older rows
                         data = ArrayList()
                         adapter.notifyDataSetChanged()
-                        firstPending = false
                     }
+                    firstPending = false
                     loading = false
                     loaded = true
                     loadedAt = System.currentTimeMillis()
                     loadedVer = ver
                     updateNotice()
+                    // Something changed while we were loading: go again.
+                    if (isShown && Files.version(kind) != ver) load()
                 }
             }
         }
     }
 
-    /** Main thread. The first chunk replaces the previous list; later chunks are appended. */
+    /** Main thread. A silent reload collects off-screen; otherwise the first chunk replaces the list. */
     private fun append(chunk: List<Media>) {
+        val st = staging
+        if (st != null) {
+            st.addAll(chunk)
+            return
+        }
         if (firstPending) {
             firstPending = false
             data = ArrayList(chunk)
@@ -269,11 +294,13 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         Sel.addListener(this)
+        Files.addLive(this)
         onChanged()
     }
 
     override fun onDetachedFromWindow() {
         Sel.removeListener(this)
+        Files.removeLive(this)
         super.onDetachedFromWindow()
     }
 
