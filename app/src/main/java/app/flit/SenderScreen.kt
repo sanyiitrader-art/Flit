@@ -38,9 +38,9 @@ private class Indicator(c: Context) : View(c) {
  * Sender: storage indicator, six synchronised tabs (History, Apps, Images, Videos, Audios,
  * Internal storage; default Apps), and the floating Send N button. All tabs share one global
  * selection ([Sel]). Tap, swipe and drag all go through the ViewPager2, so content and indicator
- * cannot disagree.
+ * cannot disagree. The storage indicator also refreshes when files or apps change elsewhere.
  */
-class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener {
+class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener, Live {
 
     private val history = HistoryTab(act)
     private val apps = AppsTab(act)
@@ -225,6 +225,11 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener {
         updateSend()
     }
 
+    /** Files or apps changed elsewhere: refresh the storage figures while this screen is visible. */
+    override fun onLive(kind: Int) {
+        if (isShown) updateStorage()
+    }
+
     override fun onShow() {
         updateStorage()
         showPage(pager.currentItem)
@@ -235,11 +240,13 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener {
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         Sel.addListener(this)
+        Files.addLive(this)
         updateSend()
     }
 
     override fun onDetachedFromWindow() {
         Sel.removeListener(this)
+        Files.removeLive(this)
         super.onDetachedFromWindow()
     }
 
