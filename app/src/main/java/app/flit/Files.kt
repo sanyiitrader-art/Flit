@@ -1,9 +1,11 @@
 package app.flit
 
 import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.database.ContentObserver
@@ -23,6 +25,11 @@ import java.util.concurrent.ThreadFactory
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.stream.Collectors
+
+/** Receives debounced change notifications (main thread). [kind] is a Types.* media kind or Files.KIND_*. */
+fun interface Live {
+    fun onLive(kind: Int)
+}
 
 /** One MediaStore entry (image, video or audio). [kind] is Types.IMAGE, Types.VIDEO or Types.AUDIO. */
 class Media(
@@ -72,6 +79,10 @@ object Files {
     private const val FIRST_CHUNK = 150
     private const val NEXT_CHUNK = 800
 
+    /** Live-change kinds beyond the media kinds (Types.IMAGE = 0, VIDEO = 1, AUDIO = 2). */
+    const val KIND_FILES = 3
+    const val KIND_APPS = 4
+
     val root: File
         get() = Environment.getExternalStorageDirectory()
 
@@ -101,38 +112,87 @@ object Files {
         }
     }
 
-    // ---- MediaStore ----------------------------------------------------------------
+    // ---- Live change tracking ---------------------------------------------------------
 
-    private val mediaVer = IntArray(3) // indexed by Types.IMAGE / VIDEO / AUDIO (0, 1, 2)
-    private val observers = ArrayList<ContentObserver>()
+    private val ver = IntArray(5)
+    private val live = ArrayList<Live>()
+    private val fire: Array<Runnable> = Array(5) { k -> Runnable { for (l in ArrayList(live)) l.onLive(k) } }
     private var watching = false
 
-    /** Increments whenever MediaStore reports a change for this kind. Main thread. */
-    fun mediaVersion(kind: Int): Int = mediaVer[kind.coerceIn(0, 2)]
+    /**
+     * Increments immediately whenever a change is reported for this kind, so a screen that is not
+     * visible can still tell "something changed" the next time it is shown. Main thread.
+     */
+    fun version(kind: Int): Int = ver[kind.coerceIn(0, 4)]
 
-    /** Starts passive change tracking (no polling, no work until MediaStore notifies). */
-    fun watchMedia() {
+    fun addLive(l: Live) {
+        if (!live.contains(l)) live.add(l)
+    }
+
+    fun removeLive(l: Live) {
+        live.remove(l)
+    }
+
+    /** Records the change now, notifies listeners once things have been quiet for 800 ms. */
+    private fun changed(kind: Int) {
+        ver[kind]++
+        FlitApp.main.removeCallbacks(fire[kind])
+        FlitApp.main.postDelayed(fire[kind], 800L)
+    }
+
+    /**
+     * Starts passive change tracking: MediaStore observers (images, video, audio, all files) and
+     * package install/update/remove broadcasts. Nothing runs until Android reports a change.
+     * Safe to call repeatedly. Observers need no permission.
+     */
+    fun watch() {
         if (watching) return
         watching = true
         val cr = FlitApp.app.contentResolver
         val uris = arrayOf(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Files.getContentUri("external")
         )
-        for (k in 0..2) {
+        for (k in 0..3) {
             val obs = object : ContentObserver(FlitApp.main) {
                 override fun onChange(selfChange: Boolean) {
-                    mediaVer[k]++
+                    changed(k)
                 }
             }
-            observers.add(obs)
             try {
                 cr.registerContentObserver(uris[k], true, obs)
             } catch (e: Exception) {
             }
         }
+
+        val filter = IntentFilter()
+        filter.addAction(Intent.ACTION_PACKAGE_ADDED)
+        filter.addAction(Intent.ACTION_PACKAGE_REMOVED)
+        filter.addAction(Intent.ACTION_PACKAGE_REPLACED)
+        filter.addAction(Intent.ACTION_PACKAGE_CHANGED)
+        filter.addDataScheme("package")
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context, i: Intent) {
+                // An uninstalled app can no longer be sent: drop it from the selection.
+                if (i.action == Intent.ACTION_PACKAGE_REMOVED && !i.getBooleanExtra(Intent.EXTRA_REPLACING, false)) {
+                    i.data?.schemeSpecificPart?.let { Sel.remove(Sel.appKey(it)) }
+                }
+                changed(KIND_APPS)
+            }
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                FlitApp.app.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                FlitApp.app.registerReceiver(receiver, filter)
+            }
+        } catch (e: Exception) {
+        }
     }
+
+    // ---- MediaStore ----------------------------------------------------------------
 
     /**
      * Newest first. Runs ONE query and streams the rows in chunks (150, then 800 at a time) so the
