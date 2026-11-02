@@ -33,6 +33,8 @@ import com.google.android.gms.location.Priority
  * steps. For the services toggle on API 28-32:
  *  1. If Google Play services is usable, Android's native "turn on Location" popup is shown
  *     (SettingsClient + ResolvableApiException). Declining it ends the step; no second dialog follows.
+ *     When the user accepts, Android can take a moment to report Location as on, so the flow waits
+ *     briefly and then trusts the accepted answer instead of cancelling.
  *  2. Otherwise (no/outdated/disabled Play services, or the API reports the change is unavailable)
  *     Flit's own LOCATION SERVICES dialog opens the full Location Settings screen.
  *
@@ -43,7 +45,8 @@ import com.google.android.gms.location.Priority
  * [onActivityResult] and [onResume]:
  *  - [startup]: runs once per launch at the first-launch steps. Each step is attempted at most once
  *    per installation, so a denied permission is never nagged again at launch.
- *  - [gate]: runs before every discovery start and only asks for what is actually missing.
+ *  - [gate]: runs before every discovery start and only asks for what is actually missing. Every
+ *    call starts from a clean state.
  */
 object Perms {
 
@@ -70,6 +73,7 @@ object Perms {
     private var locBusy = false
     private var locBusyAt = 0L
     private var locWait = false
+    private var locTrust = false // the user accepted the popup; Android may not report it yet
 
     // ---- State queries -------------------------------------------------------------
 
@@ -107,6 +111,9 @@ object Perms {
     fun hasNotif(): Boolean =
         Build.VERSION.SDK_INT < 33 || granted(Manifest.permission.POST_NOTIFICATIONS)
 
+    /** Location services count as on if Android says so, or the user just accepted the popup. */
+    private fun locationOk(): Boolean = locationOn() || locTrust
+
     // ---- Standalone actions -----------------------------------------------------------
 
     /** Asks for storage access in the way the Android version requires. No-op when granted. */
@@ -131,6 +138,7 @@ object Perms {
     /** First-launch sequence: storage, Location services, Wi-Fi Direct permission, notifications. */
     fun startup(a: Activity) {
         if (mode != MODE_NONE) return
+        resetLocation()
         mode = MODE_STARTUP
         step = 0
         advance(a)
@@ -159,7 +167,7 @@ object Perms {
                     }
                     return
                 }
-                1 -> if (needsLocationServices() && !locationOn() && once("locsvc")) {
+                1 -> if (needsLocationServices() && !locationOk() && once("locsvc")) {
                     askLocation(a)
                     return
                 }
@@ -182,8 +190,10 @@ object Perms {
      * Runs [ready] once Wi-Fi Direct can be used: permission granted, Location services on
      * (Android 9-12L) and Wi-Fi enabled. Only missing items are requested, each through Android's
      * own UI; if the user declines any step the gate is cancelled and [ready] is never called.
+     * Every call starts from a clean state, so an earlier interrupted flow cannot block it.
      */
     fun gate(a: Activity, ready: () -> Unit) {
+        resetLocation()
         mode = MODE_GATE
         gateReady = ready
         waiting = W_NONE
@@ -191,11 +201,12 @@ object Perms {
     }
 
     private fun gateStep(a: Activity) {
+        if (mode != MODE_GATE) return
         if (!hasWifiPerm()) {
             a.requestPermissions(arrayOf(wifiPerm()), REQ_WIFI)
             return
         }
-        if (needsLocationServices() && !locationOn()) {
+        if (needsLocationServices() && !locationOk()) {
             askLocation(a)
             return
         }
@@ -215,6 +226,13 @@ object Perms {
         mode = MODE_NONE
         gateReady = null
         waiting = W_NONE
+        resetLocation()
+    }
+
+    private fun resetLocation() {
+        locBusy = false
+        locWait = false
+        locTrust = false
     }
 
     // ---- Location services ---------------------------------------------------------------
@@ -247,7 +265,9 @@ object Perms {
                 }
                 if (t.isSuccessful) {
                     locBusy = false
-                    if (locationOn()) locationDone(a, true) else locationFallback(a)
+                    // Location is already satisfied; Android may just be slow to say so.
+                    locTrust = true
+                    locationDone(a, true)
                     return@addOnCompleteListener
                 }
                 val e = t.exception
@@ -289,6 +309,24 @@ object Perms {
         }
     }
 
+    /**
+     * The user accepted the native popup. Android can take a moment to report Location as on, so
+     * wait up to ~2 s for it, then trust the accepted answer and continue (never cancel).
+     */
+    private fun acceptedLocation(a: Activity, tries: Int) {
+        if (mode == MODE_NONE) return
+        if (a.isFinishing || a.isDestroyed) {
+            cancel()
+            return
+        }
+        if (locationOn() || tries >= 10) {
+            locTrust = true
+            locationDone(a, true)
+        } else {
+            FlitApp.main.postDelayed({ acceptedLocation(a, tries + 1) }, 200L)
+        }
+    }
+
     // ---- Activity callbacks --------------------------------------------------------------
 
     /** Forward from Activity.onActivityResult. Returns true if the result belonged to Perms. */
@@ -297,7 +335,12 @@ object Perms {
         locBusy = false
         if (!locWait) return true
         locWait = false
-        locationDone(a, result == Activity.RESULT_OK && locationOn())
+        if (result == Activity.RESULT_OK) {
+            acceptedLocation(a, 0)
+        } else {
+            // Declined (or the popup was dismissed). Continue only if Location is on anyway.
+            locationDone(a, locationOn())
+        }
         return true
     }
 
