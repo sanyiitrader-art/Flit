@@ -100,6 +100,9 @@
     <string name="apps_system">System apps</string>
     <string name="apps_apk_files">APK files</string>
     <string name="apk_split">Split APK</string>
+    <string name="apk_already_installed">Already installed</string>
+    <string name="apk_cannot_install">This APK cannot be installed on its own.</string>
+    <string name="apk_install_failed">Could not start the installer.</string>
     <string name="media_empty">Nothing to show</string>
     <string name="folder_empty">This folder is empty</string>
     <string name="folder_restricted">Restricted by Android</string>
