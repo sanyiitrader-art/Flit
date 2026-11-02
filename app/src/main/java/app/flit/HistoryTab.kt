@@ -2,6 +2,7 @@ package app.flit
 
 import android.content.Context
 import android.graphics.Typeface
+import android.os.FileObserver
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -16,14 +17,21 @@ import java.io.File
  * History tab: a tap-only Received / Sent switch (default Received) above a card list.
  * Entries are independent of the physical file: a missing file is greyed out and gets a Clear
  * button that removes only that entry. Entries cannot be selected or deleted otherwise.
+ *
+ * Live updates: while the tab is on screen it re-checks the files when MediaStore reports a change,
+ * when an app is installed or removed (INSTALLED badge), and when anything changes inside
+ * Download/Flit (where received files are saved). Other locations are re-checked whenever the tab
+ * is shown.
  */
-class HistoryTab(c: Context) : LinearLayout(c) {
+class HistoryTab(c: Context) : LinearLayout(c), Live {
 
     private class Row(val h: Hist, val exists: Boolean, val installed: Boolean)
 
     private var dir = Db.RECEIVED
     private var rows: MutableList<Row> = ArrayList()
     private var gen = 0
+    private var obs: FileObserver? = null
+    private val refresh = Runnable { if (isShown) load() }
 
     private val rv = RecyclerView(c)
     private val empty = Notice(c)
@@ -85,8 +93,50 @@ class HistoryTab(c: Context) : LinearLayout(c) {
 
     /** Called by the Sender screen whenever this tab becomes visible: history changes after transfers. */
     fun onShow() {
+        Files.watch()
+        watchFlit()
         load()
     }
+
+    // ---- Live updates ------------------------------------------------------------------
+
+    /** Debounced change (media, files or packages). Re-checks the entries while on screen. */
+    override fun onLive(kind: Int) {
+        if (isShown) load()
+    }
+
+    /** Watches Download/Flit, where received files live. Does nothing if the folder does not exist yet. */
+    @Suppress("DEPRECATION")
+    private fun watchFlit() {
+        obs?.stopWatching()
+        obs = null
+        val d = File(Files.root, "Download/Flit")
+        if (!d.isDirectory || !Perms.hasStorage()) return
+        val o = object : FileObserver(d.path, MASK) {
+            override fun onEvent(event: Int, name: String?) {
+                FlitApp.main.removeCallbacks(refresh)
+                FlitApp.main.postDelayed(refresh, 600L)
+            }
+        }
+        o.startWatching()
+        obs = o
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        Files.addLive(this)
+        watchFlit()
+    }
+
+    override fun onDetachedFromWindow() {
+        Files.removeLive(this)
+        obs?.stopWatching()
+        obs = null
+        FlitApp.main.removeCallbacks(refresh)
+        super.onDetachedFromWindow()
+    }
+
+    // ---- Loading -----------------------------------------------------------------------
 
     private fun load() {
         val d = dir
@@ -218,5 +268,10 @@ class HistoryTab(c: Context) : LinearLayout(c) {
             r.action.visibility = View.VISIBLE
             r.action.setOnClickListener { Files.open(context, e.path) }
         }
+    }
+
+    private companion object {
+        const val MASK = FileObserver.CREATE or FileObserver.DELETE or FileObserver.MOVED_FROM or
+            FileObserver.MOVED_TO or FileObserver.CLOSE_WRITE
     }
 }
