@@ -95,6 +95,9 @@
     <string name="apps_system">Apps del sistema</string>
     <string name="apps_apk_files">Archivos APK</string>
     <string name="apk_split">APK dividido</string>
+    <string name="apk_already_installed">Ya instalada</string>
+    <string name="apk_cannot_install">Este APK no se puede instalar por sí solo.</string>
+    <string name="apk_install_failed">No se pudo iniciar el instalador.</string>
     <string name="media_empty">Nada que mostrar</string>
     <string name="folder_empty">Esta carpeta está vacía</string>
     <string name="folder_restricted">Restringido por Android</string>
