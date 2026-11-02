@@ -1,7 +1,11 @@
 package app.flit
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.graphics.drawable.Drawable
+import android.net.Uri
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -74,8 +78,14 @@ class AppCell(c: Context) : FrameLayout(c) {
 /**
  * Apps tab: four-column grid. Order: installed user apps, APK files found in storage,
  * then a collapsible (collapsed by default) System apps section.
- * Apps load on first show; APK files are scanned lazily afterwards and only with storage access.
- * Split-APK apps are marked, since their files are not independently installable.
+ *
+ * Loading is progressive: user apps and the APK scan run in parallel on a dedicated pool and each
+ * appears as soon as it is ready. System apps are only labelled when their section is opened.
+ *
+ * Tap selects / deselects. Long-press never selects:
+ *  - installed app            -> "Already installed" dialog
+ *  - APK file, same or newer version installed (package identity, not filename) -> same dialog
+ *  - APK file, not installed (or older) -> Android's own Package Installer
  */
 class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
 
@@ -90,7 +100,8 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
     private val rv = RecyclerView(c)
     private val adapter = Ad()
     private var users: List<AppEntry> = emptyList()
-    private var systems: List<AppEntry> = emptyList()
+    private var systemRaw: List<ApplicationInfo> = emptyList()
+    private var systems: List<AppEntry>? = null
     private var apks: List<ApkFile> = emptyList()
     private var rows: List<Row> = emptyList()
     private var showSystem = false
@@ -98,6 +109,7 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
     private var apksAt = 0L
     private var apksHadAccess = false
     private var gen = 0
+    private var pendingInstall: String? = null
     private val px: Int by lazy { Ui.dp(56) }
 
     init {
@@ -116,36 +128,37 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
 
     /** Called by the Sender screen whenever this tab becomes visible. */
     fun onShow() {
+        resumeInstall()
         val now = System.currentTimeMillis()
         val access = Perms.hasStorage()
         val stale = now - loadedAt > 30_000L
         val apksStale = access && (!apksHadAccess || now - apksAt > 30_000L)
-        if (loadedAt == 0L || stale) load(access) else if (apksStale) loadApks()
+        if (loadedAt == 0L || stale) load(access) else if (apksStale) loadApks(gen)
     }
 
     private fun load(access: Boolean) {
         val g = ++gen
-        FlitApp.io.execute {
-            val all = try {
-                Files.queryApps()
+        Files.pool.execute {
+            val fast = try {
+                Files.queryUserApps()
             } catch (e: Exception) {
-                emptyList()
+                AppsFast(emptyList(), emptyList())
             }
             FlitApp.main.post {
                 if (g == gen) {
-                    users = all.filter { !it.system }
-                    systems = all.filter { it.system }
+                    users = fast.users
+                    systemRaw = fast.systems
                     loadedAt = System.currentTimeMillis()
+                    if (showSystem) loadSystems() else systems = null
                     rebuild()
-                    if (access) loadApks()
                 }
             }
         }
+        if (access) loadApks(g) // runs alongside the app query, not after it
     }
 
-    private fun loadApks() {
-        val g = gen
-        FlitApp.io.execute {
+    private fun loadApks(g: Int) {
+        Files.pool.execute {
             val list = try {
                 Files.queryApks()
             } catch (e: Exception) {
@@ -162,16 +175,35 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
         }
     }
 
+    /** Labels the system apps (only when their section is opened). Old rows stay until the new ones arrive. */
+    private fun loadSystems() {
+        val raw = systemRaw
+        Files.pool.execute {
+            val l = try {
+                Files.systemEntries(raw)
+            } catch (e: Exception) {
+                emptyList()
+            }
+            FlitApp.main.post {
+                if (raw === systemRaw) {
+                    systems = l
+                    rebuild()
+                }
+            }
+        }
+    }
+
     private fun rebuild() {
-        val l = ArrayList<Row>(users.size + apks.size + systems.size + 2)
+        val sys = systems
+        val l = ArrayList<Row>(users.size + apks.size + (sys?.size ?: 0) + 2)
         for (a in users) l.add(Row(APP, app = a))
         if (apks.isNotEmpty()) {
             l.add(Row(HEADER, title = context.getString(R.string.apps_apk_files)))
             for (f in apks) l.add(Row(APK, apk = f))
         }
-        if (systems.isNotEmpty()) {
+        if (systemRaw.isNotEmpty()) {
             l.add(Row(HEADER, title = context.getString(R.string.apps_system), expandable = true))
-            if (showSystem) for (a in systems) l.add(Row(APP, app = a))
+            if (showSystem && sys != null) for (a in sys) l.add(Row(APP, app = a))
         }
         rows = l
         adapter.notifyDataSetChanged()
@@ -200,6 +232,61 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
         else -> false
     }
 
+    // ---- Long-press: already installed / install ---------------------------------------
+
+    private fun alreadyInstalled(a: android.app.Activity) {
+        Dialogs.show(a, a.getString(R.string.apk_already_installed), null, a.getString(R.string.dialog_ok), null)
+    }
+
+    private fun longPress(r: Row) {
+        val a = context.findActivity() ?: return
+        if (r.app != null) {
+            alreadyInstalled(a)
+            return
+        }
+        val f = r.apk ?: return
+        Files.pool.execute {
+            // Package identity from the APK itself, never from its filename.
+            val meta = Files.apkMeta(f.path)
+            val installed = if (meta != null) Files.installedVersion(meta.first) else -1L
+            FlitApp.main.post {
+                when {
+                    a.isFinishing || a.isDestroyed -> {}
+                    meta == null -> Ui.toast(a, R.string.apk_cannot_install)
+                    installed >= meta.second -> alreadyInstalled(a)
+                    else -> startInstall(a, f.path)
+                }
+            }
+        }
+    }
+
+    private fun startInstall(a: android.app.Activity, path: String) {
+        if (Files.canInstall(a)) {
+            if (!Files.install(a, path)) Ui.toast(a, R.string.apk_install_failed)
+            return
+        }
+        // "Install unknown apps" is off for Flit: Android's own page for it. The installer
+        // starts automatically when the user comes back with the permission granted.
+        pendingInstall = path
+        try {
+            a.startActivity(
+                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + a.packageName))
+            )
+        } catch (e: Exception) {
+            pendingInstall = null
+            Ui.toast(a, R.string.apk_install_failed)
+        }
+    }
+
+    private fun resumeInstall() {
+        val p = pendingInstall ?: return
+        pendingInstall = null
+        val a = context.findActivity() ?: return
+        if (Files.canInstall(a) && !Files.install(a, p)) Ui.toast(a, R.string.apk_install_failed)
+    }
+
+    // ---- Adapter ---------------------------------------------------------------------------
+
     private inner class Ad : RecyclerView.Adapter<VH>() {
 
         override fun getItemCount(): Int = rows.size
@@ -214,6 +301,7 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
                     val p = h.bindingAdapterPosition
                     if (p != RecyclerView.NO_POSITION && rows[p].expandable) {
                         showSystem = !showSystem
+                        if (showSystem && systems == null) loadSystems()
                         rebuild()
                     }
                 }
@@ -224,6 +312,12 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
             cell.setOnClickListener {
                 val p = h.bindingAdapterPosition
                 if (p != RecyclerView.NO_POSITION) item(rows[p])?.let { Sel.toggle(it) }
+            }
+            // Returning true consumes the press, so a long-press never also selects.
+            cell.setOnLongClickListener {
+                val p = h.bindingAdapterPosition
+                if (p != RecyclerView.NO_POSITION) longPress(rows[p])
+                true
             }
             return h
         }
