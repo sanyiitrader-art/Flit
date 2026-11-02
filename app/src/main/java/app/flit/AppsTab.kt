@@ -82,12 +82,16 @@ class AppCell(c: Context) : FrameLayout(c) {
  * Loading is progressive: user apps and the APK scan run in parallel on a dedicated pool and each
  * appears as soon as it is ready. System apps are only labelled when their section is opened.
  *
+ * Live updates: installing, updating or removing an app (package broadcasts) refreshes the grid, and
+ * APK files appearing or disappearing refresh the APK section, whenever this tab is on screen.
+ * Changes that happen while it is hidden are detected the next time it is shown.
+ *
  * Tap selects / deselects. Long-press never selects:
  *  - installed app            -> "Already installed" dialog
  *  - APK file, same or newer version installed (package identity, not filename) -> same dialog
  *  - APK file, not installed (or older) -> Android's own Package Installer
  */
-class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
+class AppsTab(c: Context) : FrameLayout(c), Sel.Listener, Live {
 
     private class Row(
         val type: Int,
@@ -108,6 +112,8 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
     private var loadedAt = 0L
     private var apksAt = 0L
     private var apksHadAccess = false
+    private var appsVer = -1
+    private var filesVer = -1
     private var gen = 0
     private var pendingInstall: String? = null
     private val px: Int by lazy { Ui.dp(56) }
@@ -129,15 +135,27 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
     /** Called by the Sender screen whenever this tab becomes visible. */
     fun onShow() {
         resumeInstall()
+        Files.watch()
         val now = System.currentTimeMillis()
         val access = Perms.hasStorage()
         val stale = now - loadedAt > 30_000L
-        val apksStale = access && (!apksHadAccess || now - apksAt > 30_000L)
-        if (loadedAt == 0L || stale) load(access) else if (apksStale) loadApks(gen)
+        val appsChanged = Files.version(Files.KIND_APPS) != appsVer
+        val apksStale = access &&
+            (!apksHadAccess || now - apksAt > 30_000L || Files.version(Files.KIND_FILES) != filesVer)
+        if (loadedAt == 0L || stale || appsChanged) load(access) else if (apksStale) loadApks(gen)
+    }
+
+    /** Debounced change: a package changed, or files (APKs) changed. Refreshes only while on screen. */
+    override fun onLive(kind: Int) {
+        if (!isShown) return
+        val access = Perms.hasStorage()
+        if (kind == Files.KIND_APPS) load(access)
+        else if (access && (kind == Files.KIND_FILES || kind <= Types.AUDIO)) loadApks(gen)
     }
 
     private fun load(access: Boolean) {
         val g = ++gen
+        appsVer = Files.version(Files.KIND_APPS)
         Files.pool.execute {
             val fast = try {
                 Files.queryUserApps()
@@ -158,6 +176,7 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
     }
 
     private fun loadApks(g: Int) {
+        val v = Files.version(Files.KIND_FILES)
         Files.pool.execute {
             val list = try {
                 Files.queryApks()
@@ -169,6 +188,7 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
                     apks = list
                     apksAt = System.currentTimeMillis()
                     apksHadAccess = true
+                    filesVer = v
                     rebuild()
                 }
             }
@@ -216,11 +236,13 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         Sel.addListener(this)
+        Files.addLive(this)
         onChanged()
     }
 
     override fun onDetachedFromWindow() {
         Sel.removeListener(this)
+        Files.removeLive(this)
         super.onDetachedFromWindow()
     }
 
@@ -338,7 +360,7 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener {
                 cell.name.text = app.label
                 cell.note.text = context.getString(R.string.apk_split)
                 cell.note.visibility = if (app.splits.isNotEmpty()) View.VISIBLE else View.GONE
-                Thumbs.load(cell.icon, "app:${app.pkg}", cell.ph, 10) { Thumbs.appIcon(app.pkg, px) }
+                Thumbs.load(cell.icon, "app:${app.pkg}:${app.path}", cell.ph, 10) { Thumbs.appIcon(app.pkg, px) }
             } else {
                 val f = r.apk!!
                 cell.name.text = f.name.substringBeforeLast('.')
