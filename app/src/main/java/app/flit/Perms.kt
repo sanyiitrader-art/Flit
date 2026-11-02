@@ -11,7 +11,15 @@ import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Environment
+import android.os.SystemClock
 import android.provider.Settings
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
+import com.google.android.gms.common.api.ResolvableApiException
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.LocationSettingsRequest
+import com.google.android.gms.location.Priority
 
 /**
  * Version-aware permission and system-state logic.
@@ -21,7 +29,18 @@ import android.provider.Settings
  *    BLUETOOTH_* permissions are not involved on any version.
  *  - Notifications: runtime permission on API 33+ only.
  *
- * Two flows share one small state machine, driven by the Activity forwarding [onResult] and [onResume]:
+ * Location SERVICES (the device toggle) and the Location PERMISSION (granted to Flit) are separate
+ * steps. For the services toggle on API 28-32:
+ *  1. If Google Play services is usable, Android's native "turn on Location" popup is shown
+ *     (SettingsClient + ResolvableApiException). Declining it ends the step; no second dialog follows.
+ *  2. Otherwise (no/outdated/disabled Play services, or the API reports the change is unavailable)
+ *     Flit's own LOCATION SERVICES dialog opens the full Location Settings screen.
+ *
+ * Wi-Fi off: Android's own Wi-Fi panel (API 29+) or Wi-Fi settings page (API 28) opens directly.
+ * Flit never turns Wi-Fi or Location on silently.
+ *
+ * Two flows share one small state machine, driven by the Activity forwarding [onResult],
+ * [onActivityResult] and [onResume]:
  *  - [startup]: runs once per launch at the first-launch steps. Each step is attempted at most once
  *    per installation, so a denied permission is never nagged again at launch.
  *  - [gate]: runs before every discovery start and only asks for what is actually missing.
@@ -31,6 +50,7 @@ object Perms {
     const val REQ_STORAGE = 71
     const val REQ_WIFI = 72
     const val REQ_NOTIF = 73
+    const val REQ_LOC = 74
 
     private const val MODE_NONE = 0
     private const val MODE_STARTUP = 1
@@ -45,6 +65,11 @@ object Perms {
     private var step = 0
     private var waiting = W_NONE
     private var gateReady: (() -> Unit)? = null
+
+    // Native Location popup bookkeeping.
+    private var locBusy = false
+    private var locBusyAt = 0L
+    private var locWait = false
 
     // ---- State queries -------------------------------------------------------------
 
@@ -135,10 +160,7 @@ object Perms {
                     return
                 }
                 1 -> if (needsLocationServices() && !locationOn() && once("locsvc")) {
-                    Dialogs.location(a, {
-                        waiting = W_LOCSVC
-                        launch(a, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-                    }, { advance(a) })
+                    askLocation(a)
                     return
                 }
                 2 -> if (!hasWifiPerm() && once("wifi")) {
@@ -158,8 +180,8 @@ object Perms {
 
     /**
      * Runs [ready] once Wi-Fi Direct can be used: permission granted, Location services on
-     * (Android 9-12L) and Wi-Fi enabled. Only missing items are requested; if the user declines
-     * any step the gate is cancelled and [ready] is never called.
+     * (Android 9-12L) and Wi-Fi enabled. Only missing items are requested, each through Android's
+     * own UI; if the user declines any step the gate is cancelled and [ready] is never called.
      */
     fun gate(a: Activity, ready: () -> Unit) {
         mode = MODE_GATE
@@ -174,23 +196,14 @@ object Perms {
             return
         }
         if (needsLocationServices() && !locationOn()) {
-            Dialogs.location(a, {
-                waiting = W_LOCSVC
-                launch(a, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-            }, { cancel() })
+            askLocation(a)
             return
         }
         if (!wifiOn()) {
-            Dialogs.show(
-                a, a.getString(R.string.wifi_off_title), a.getString(R.string.wifi_off_msg),
-                a.getString(R.string.btn_turn_on), {
-                    waiting = W_WIFI
-                    val i = if (Build.VERSION.SDK_INT >= 29) Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
-                    else Intent(Settings.ACTION_WIFI_SETTINGS)
-                    launch(a, i)
-                },
-                a.getString(R.string.dialog_cancel), { cancel() }
-            )
+            waiting = W_WIFI
+            val i = if (Build.VERSION.SDK_INT >= 29) Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
+            else Intent(Settings.ACTION_WIFI_SETTINGS)
+            if (!launch(a, i)) cancel()
             return
         }
         val r = gateReady
@@ -204,7 +217,89 @@ object Perms {
         waiting = W_NONE
     }
 
+    // ---- Location services ---------------------------------------------------------------
+
+    /**
+     * Asks to turn Location services on. Uses the native Google Play services popup when it is
+     * available; otherwise falls back to Flit's own dialog (see [locationFallback]).
+     */
+    private fun askLocation(a: Activity) {
+        val now = SystemClock.elapsedRealtime()
+        if (locBusy && now - locBusyAt < 15_000L) return // a check or popup is already in flight
+        if (GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(a) != ConnectionResult.SUCCESS) {
+            locationFallback(a)
+            return
+        }
+        locBusy = true
+        locBusyAt = now
+        try {
+            val req = LocationSettingsRequest.Builder()
+                .addLocationRequest(
+                    LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 10_000L).build()
+                )
+                .setAlwaysShow(true)
+                .build()
+            LocationServices.getSettingsClient(a).checkLocationSettings(req).addOnCompleteListener { t ->
+                if (a.isFinishing || a.isDestroyed) {
+                    locBusy = false
+                    cancel()
+                    return@addOnCompleteListener
+                }
+                if (t.isSuccessful) {
+                    locBusy = false
+                    if (locationOn()) locationDone(a, true) else locationFallback(a)
+                    return@addOnCompleteListener
+                }
+                val e = t.exception
+                if (e is ResolvableApiException) {
+                    try {
+                        locWait = true
+                        e.startResolutionForResult(a, REQ_LOC)
+                    } catch (x: Exception) {
+                        locWait = false
+                        locBusy = false
+                        locationFallback(a)
+                    }
+                } else {
+                    locBusy = false
+                    locationFallback(a)
+                }
+            }
+        } catch (e: Exception) {
+            locBusy = false
+            locationFallback(a)
+        }
+    }
+
+    /** Flit's own LOCATION SERVICES dialog, used only when the native popup is unavailable. */
+    private fun locationFallback(a: Activity) {
+        Dialogs.location(a, {
+            waiting = W_LOCSVC
+            launch(a, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+        }, {
+            if (mode == MODE_STARTUP) advance(a) else cancel()
+        })
+    }
+
+    /** Continues the running flow after the Location services step finished. */
+    private fun locationDone(a: Activity, ok: Boolean) {
+        when (mode) {
+            MODE_STARTUP -> advance(a)
+            MODE_GATE -> if (ok) gateStep(a) else cancel()
+        }
+    }
+
     // ---- Activity callbacks --------------------------------------------------------------
+
+    /** Forward from Activity.onActivityResult. Returns true if the result belonged to Perms. */
+    fun onActivityResult(a: Activity, req: Int, result: Int): Boolean {
+        if (req != REQ_LOC) return false
+        locBusy = false
+        if (!locWait) return true
+        locWait = false
+        locationDone(a, result == Activity.RESULT_OK && locationOn())
+        return true
+    }
 
     /** Forward from Activity.onRequestPermissionsResult. */
     fun onResult(a: Activity, req: Int, results: IntArray) {
@@ -281,11 +376,13 @@ object Perms {
         )
     }
 
-    private fun launch(a: Activity, i: Intent) {
-        try {
+    private fun launch(a: Activity, i: Intent): Boolean {
+        return try {
             a.startActivity(i)
+            true
         } catch (e: ActivityNotFoundException) {
             waiting = W_NONE
+            false
         }
     }
 }
