@@ -161,18 +161,23 @@ class ImageCell(c: Context) : FrameLayout(c) {
 
 /**
  * Images (3-column grid), Videos and Audios (card lists) share this view. Media is read from
- * MediaStore lazily on first show and re-read at most every 10 seconds. Needs all-files access;
- * without it a notice with a grant button is shown instead.
+ * MediaStore with ONE query that streams its rows: the first 150 appear almost immediately and the
+ * rest are appended in chunks. It reloads only when MediaStore reports a change for this media kind
+ * (or after 5 minutes as a safety net), not on every tab switch. Needs all-files access; without
+ * it a notice with a grant button is shown instead.
  */
 class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener {
 
     private val rv = RecyclerView(c)
     private val notice = Notice(c)
     private val adapter = Ad()
-    private var data: List<Media> = emptyList()
+    private var data: MutableList<Media> = ArrayList()
     private var gen = 0
     private var loaded = false
+    private var loading = false
+    private var firstPending = false
     private var loadedAt = 0L
+    private var loadedVer = -1
     private val px: Int by lazy { Ui.dp(if (kind == Types.IMAGE) 120 else 96) }
 
     init {
@@ -190,8 +195,10 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
         if (!Perms.hasStorage()) {
             gen++
             loaded = false
+            loading = false
+            loadedVer = -1
             if (data.isNotEmpty()) {
-                data = emptyList()
+                data = ArrayList()
                 adapter.notifyDataSetChanged()
             }
             notice.set(
@@ -200,27 +207,54 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
             ) { context.findActivity()?.let { Perms.requestStorage(it) } }
             return
         }
+        Files.watchMedia()
+        if (loading) return
         val now = System.currentTimeMillis()
-        if (!loaded || now - loadedAt > 10_000L) load() else updateNotice()
+        val changed = Files.mediaVersion(kind) != loadedVer
+        if (!loaded || changed || now - loadedAt > 300_000L) load() else updateNotice()
     }
 
     private fun load() {
         val g = ++gen
-        FlitApp.io.execute {
-            val list = try {
-                Files.queryMedia(kind)
+        val ver = Files.mediaVersion(kind)
+        loading = true
+        firstPending = true
+        notice.hide()
+        Files.pool.execute {
+            try {
+                Files.streamMedia(kind, { g != gen }) { chunk ->
+                    FlitApp.main.post { if (g == gen) append(chunk) }
+                }
             } catch (e: Exception) {
-                emptyList()
             }
             FlitApp.main.post {
                 if (g == gen) {
-                    data = list
+                    if (firstPending) { // the query returned nothing: replace any older rows
+                        data = ArrayList()
+                        adapter.notifyDataSetChanged()
+                        firstPending = false
+                    }
+                    loading = false
                     loaded = true
                     loadedAt = System.currentTimeMillis()
-                    adapter.notifyDataSetChanged()
+                    loadedVer = ver
                     updateNotice()
                 }
             }
+        }
+    }
+
+    /** Main thread. The first chunk replaces the previous list; later chunks are appended. */
+    private fun append(chunk: List<Media>) {
+        if (firstPending) {
+            firstPending = false
+            data = ArrayList(chunk)
+            adapter.notifyDataSetChanged()
+            notice.hide()
+        } else {
+            val start = data.size
+            data.addAll(chunk)
+            adapter.notifyItemRangeInserted(start, chunk.size)
         }
     }
 
