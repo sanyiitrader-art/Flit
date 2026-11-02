@@ -209,4 +209,8 @@ androidComponents {
 dependencies {
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("androidx.viewpager2:viewpager2:1.1.0")
+
+    // Native "Turn on Location" popup (SettingsClient / ResolvableApiException).
+    // Used only on Android 9-12L and only when Google Play services is available.
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 }
