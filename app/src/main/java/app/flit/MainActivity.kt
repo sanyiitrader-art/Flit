@@ -60,6 +60,9 @@ class MainActivity : Activity() {
             push(SettingsScreen(this))
         }
         if (savedInstanceState == null) root.post { Perms.startup(this) }
+
+        // One-off warm-up after the first frame: app labels are cached before Sender is opened.
+        root.post { Files.prefetchApps() }
     }
 
     @Suppress("DEPRECATION")
@@ -139,6 +142,7 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
+        if (Perms.onActivityResult(this, requestCode, resultCode)) return
         stack.lastOrNull()?.onResult(requestCode, resultCode == RESULT_OK, data)
     }
 
