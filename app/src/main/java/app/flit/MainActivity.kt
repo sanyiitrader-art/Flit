@@ -61,8 +61,12 @@ class MainActivity : Activity() {
         }
         if (savedInstanceState == null) root.post { Perms.startup(this) }
 
-        // One-off warm-up after the first frame: app labels are cached before Sender is opened.
-        root.post { Files.prefetchApps() }
+        // After the first frame: start passive change tracking (no work until something changes),
+        // and warm the app-label cache so Sender opens with labels already cached.
+        root.post {
+            Files.watch()
+            Files.prefetchApps()
+        }
     }
 
     @Suppress("DEPRECATION")
