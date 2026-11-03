@@ -9,14 +9,48 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 
-/** Receiver-mode state shared by the screen and the in-app bubble. Phase 2 drives it from the service. */
+/**
+ * Receiver mode. Turning it on publishes this device over Wi-Fi Direct and lets it accept the
+ * Group Owner's connection; turning it off stops that. Running transfers continue until they end.
+ */
 object Rx {
+
     var active = false
         private set
 
-    fun set(on: Boolean) {
-        active = on
+    private var profile = ""
+
+    /** Returns false (and shows a message) if Wi-Fi Direct cannot be used. */
+    fun set(on: Boolean): Boolean {
+        if (on == active) return true
+        if (on) {
+            Xfer.ensure()
+            if (!P2p.advertise(true)) {
+                Ui.toast(FlitApp.ctx(), R.string.err_p2p_unsupported)
+                return false
+            }
+            Link.use(true)
+            active = true
+            profile = sig()
+        } else {
+            active = false
+            P2p.advertise(false)
+            Link.use(false)
+            ReceiveEngine.declineAll()
+        }
         Bubbles.receiver(on)
+        Xfer.sync()
+        return true
+    }
+
+    private fun sig(): String = Prefs.name + "|" + Prefs.avatarRev
+
+    /** Publishes the new name / avatar revision if the profile changed while discoverable. */
+    fun refreshProfile() {
+        if (active && sig() != profile) {
+            profile = sig()
+            P2p.refreshAdvertising()
+        }
     }
 }
 
@@ -54,7 +88,6 @@ class ToggleView(c: Context) : View(c) {
 /**
  * Receiver: back arrow (stops Receiver mode), minimize (keeps it active, shows the in-app bubble),
  * centred avatar with radiating waves, DISCOVERABLE, and the simultaneous-transfers toggle.
- * Phase 1 is visual only: advertising and transfers arrive in Phase 2.
  */
 class ReceiverScreen(act: MainActivity) : Screen(act) {
 
@@ -126,5 +159,6 @@ class ReceiverScreen(act: MainActivity) : Screen(act) {
 
     override fun onShow() {
         wave.refresh()
+        Rx.refreshProfile()
     }
 }
