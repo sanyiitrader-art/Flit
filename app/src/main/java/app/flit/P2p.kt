@@ -424,23 +424,10 @@ object P2p {
 
     // ---- Sender: connect / leave ----------------------------------------------------------------
 
-    private fun config(addr: String): WifiP2pConfig {
-        var c: WifiP2pConfig? = null
-        if (Build.VERSION.SDK_INT >= 29 && Tuning.band5) {
-            try {
-                c = WifiP2pConfig.Builder()
-                    .setDeviceAddress(MacAddress.fromString(addr))
-                    .setGroupOwnerBand(WifiP2pConfig.GROUP_OWNER_BAND_5GHZ)
-                    .build()
-            } catch (e: Exception) {
-                c = null
-            }
-        }
-        if (c == null) {
-            c = WifiP2pConfig()
-            c.deviceAddress = addr
-            c.wps.setup = WpsInfo.PBC
-        }
+        private fun config(addr: String): WifiP2pConfig {
+        val c = WifiP2pConfig()
+        c.deviceAddress = addr
+        c.wps.setup = WpsInfo.PBC
         c.groupOwnerIntent = 15 // the Sender should be the Group Owner (can serve several Receivers)
         return c
     }
