@@ -39,6 +39,7 @@ private class Indicator(c: Context) : View(c) {
  * Internal storage; default Apps), and the floating Send N button. All tabs share one global
  * selection ([Sel]). Tap, swipe and drag all go through the ViewPager2, so content and indicator
  * cannot disagree. The storage indicator also refreshes when files or apps change elsewhere.
+ * Send checks Wi-Fi / permissions, then opens receiver discovery (or returns to a running send).
  */
 class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener, Live {
 
@@ -146,10 +147,7 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener, Live {
         // Floating Send button, visible on every tab.
         send.textSize = 15f
         send.setPadding(Ui.dp(28), Ui.dp(15), Ui.dp(28), Ui.dp(15))
-        send.setOnClickListener {
-            // Phase 2 starts discovery here. For now only the permission/Wi-Fi gate runs.
-            Perms.gate(act) { }
-        }
+        send.setOnClickListener { Xfer.startSend(act) }
         addView(
             send,
             FrameLayout.LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.BOTTOM or Gravity.END).also {
