@@ -36,7 +36,7 @@
     <!-- Required by Android to create TCP sockets. Flit never uses the internet for transfers. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Notifications and background operation (service is declared in Phase 2). -->
+    <!-- Notifications and background operation. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
@@ -69,6 +69,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Keeps Receiver mode and running transfers alive in the background (added in Phase 2). -->
+        <service
+            android:name=".TransferService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
