@@ -135,6 +135,15 @@ class Conn(val sock: Socket, readTimeoutMs: Int) {
             dout.flush()
         }
     }
+    /** Writes an already-built frame (used by the per-peer writer thread). */
+    fun sendRaw(type: Int, body: ByteArray?) {
+        synchronized(wlock) {
+            dout.writeByte(type)
+            dout.writeInt(body?.size ?: 0)
+            if (body != null) dout.write(body)
+            dout.flush()
+        }
+    }
 
     fun read(): Frame {
         val t = din.readUnsignedByte()
