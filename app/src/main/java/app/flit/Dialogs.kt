@@ -81,6 +81,27 @@ object Dialogs {
         present(a, d)
     }
 
+    /** Dialog with a caller-supplied body view (used by the hidden tuning panel). */
+    fun custom(
+        a: Activity,
+        title: String,
+        body: View,
+        positive: String,
+        onPositive: (() -> Unit)?,
+        negative: String? = null,
+        onNegative: (() -> Unit)? = null
+    ) {
+        val (d, col) = frame(a, title, true)
+        d.setCanceledOnTouchOutside(true)
+        col.addView(body, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(12) })
+        if (negative != null) {
+            buttons(a, col, pill(a, d, negative, false, onNegative), pill(a, d, positive, true, onPositive))
+        } else {
+            buttons(a, col, pill(a, d, positive, true, onPositive))
+        }
+        present(a, d)
+    }
+
     /** LOCATION SERVICES explanation (Android 9-12L). */
     fun location(a: Activity, onEnable: () -> Unit, onNotNow: () -> Unit) {
         show(
@@ -111,7 +132,10 @@ object Dialogs {
         present(a, d)
     }
 
-    /** INCOMING TRANSFER request. [queued] is the number of further requests waiting. */
+    /**
+     * INCOMING TRANSFER request. [queued] is the number of further requests waiting.
+     * Returns the Dialog so the caller can dismiss it if the request is cancelled or expires.
+     */
     fun incoming(
         a: Activity,
         sender: String,
@@ -120,7 +144,7 @@ object Dialogs {
         queued: Int,
         onAccept: () -> Unit,
         onDecline: () -> Unit
-    ) {
+    ): Dialog {
         val (d, col) = frame(a, a.getString(R.string.incoming_title), false)
         message(a, col, a.getString(R.string.incoming_message, sender))
         val count = a.resources.getQuantityString(R.plurals.files_count, files, files)
@@ -140,6 +164,7 @@ object Dialogs {
             pill(a, d, a.getString(R.string.btn_accept), true, onAccept)
         )
         present(a, d)
+        return d
     }
 
     /** Confirmation before anything is deleted. */
