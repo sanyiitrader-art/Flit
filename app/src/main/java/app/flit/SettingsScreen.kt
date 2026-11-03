@@ -211,7 +211,7 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
      * Copies Flit's own connection log (tags FlitP2p, FlitLink, FlitSend) to the clipboard. Android
      * lets an app read its own log lines without any permission. Nothing is sent anywhere.
      */
-    private fun copyLog() {
+        private fun copyLog() {
         Toast.makeText(act, "Collecting log...", Toast.LENGTH_SHORT).show()
         FlitApp.io.execute {
             val body = try {
@@ -227,10 +227,11 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
                 "could not read the log: " + e.message
             }
             val lines = body.lines().filter { it.isNotBlank() }.takeLast(200)
-            val text = "Flit log | " + Build.MANUFACTURER + " " + Build.MODEL +
-                " | Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")\n" +
-                                (if (lines.isEmpty()) "(no connection log yet: try a send first)" else lines.joinToString("\n")) +
-                "\n\nLast receives:\n" + Tuning.lastResults().ifBlank { "-" }
+            val header = "Flit log | " + Build.MANUFACTURER + " " + Build.MODEL +
+                " | Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")"
+            val logText = if (lines.isEmpty()) "(no connection log yet: try a send first)" else lines.joinToString("\n")
+            val results = Tuning.lastResults().ifBlank { "-" }
+            val text = header + "\n" + logText + "\n\nLast receives:\n" + results
             FlitApp.main.post {
                 val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                 cm?.setPrimaryClip(ClipData.newPlainText("Flit log", text))
