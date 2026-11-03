@@ -2,19 +2,44 @@ package app.flit
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.wifi.p2p.WifiP2pInfo
 import android.os.SystemClock
+import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+
+private const val TAG = "FlitLink"
+
+private fun frameName(t: Int): String = when (t) {
+    Proto.HELLO -> "HELLO"
+    Proto.REQUEST -> "REQUEST"
+    Proto.ACCEPT -> "ACCEPT"
+    Proto.DECLINE -> "DECLINE"
+    Proto.CANCEL -> "CANCEL"
+    Proto.MANIFEST -> "MANIFEST"
+    Proto.MANIFEST_END -> "MANIFEST_END"
+    Proto.PAUSE -> "PAUSE"
+    Proto.RESUME -> "RESUME"
+    Proto.STOP -> "STOP"
+    Proto.STREAM_WANT -> "STREAM_WANT"
+    Proto.FILE_DONE -> "FILE_DONE"
+    Proto.AVATAR -> "AVATAR"
+    Proto.FINISHED -> "FINISHED"
+    else -> "type$t"
+}
 
 /**
  * One remote device with a live control connection. The control connection carries session
@@ -52,8 +77,10 @@ class Peer(val control: Conn, val host: InetAddress, val weAreClient: Boolean, h
     fun send(type: Int, w: Wr? = null): Boolean {
         return try {
             control.send(type, w)
+            if (type != Proto.PING && type != Proto.PONG) Log.d(TAG, "ctl >> ${frameName(type)} to $name")
             true
         } catch (e: IOException) {
+            Log.w(TAG, "ctl >> ${frameName(type)} to $name failed: ${e.javaClass.simpleName}: ${e.message}")
             close()
             false
         }
@@ -69,6 +96,9 @@ class Peer(val control: Conn, val host: InetAddress, val weAreClient: Boolean, h
             try {
                 while (alive) {
                     val f = control.read()
+                    if (f.type != Proto.PING && f.type != Proto.PONG) {
+                        Log.d(TAG, "ctl << ${frameName(f.type)} from $name")
+                    }
                     when (f.type) {
                         Proto.PING -> send(Proto.PONG)
                         Proto.PONG -> {}
@@ -77,7 +107,9 @@ class Peer(val control: Conn, val host: InetAddress, val weAreClient: Boolean, h
                     }
                 }
             } catch (e: IOException) {
+                Log.d(TAG, "ctl reader of $name ended: ${e.javaClass.simpleName}: ${e.message}")
             } catch (e: RuntimeException) {
+                Log.w(TAG, "ctl reader of $name crashed: ${e.javaClass.simpleName}: ${e.message}")
             }
             close()
         }, "flit-ctl").start()
@@ -121,6 +153,7 @@ class Peer(val control: Conn, val host: InetAddress, val weAreClient: Boolean, h
                 c
             }
         } catch (e: IOException) {
+            Log.w(TAG, "data dial to $name failed: ${e.javaClass.simpleName}: ${e.message}")
             null
         }
     }
@@ -150,6 +183,7 @@ class Peer(val control: Conn, val host: InetAddress, val weAreClient: Boolean, h
 
     fun close() {
         if (!closed.compareAndSet(false, true)) return
+        Log.d(TAG, "peer $name closed")
         alive = false
         control.close()
         for (s in streams) s.close()
@@ -168,7 +202,8 @@ class Peer(val control: Conn, val host: InetAddress, val weAreClient: Boolean, h
 /**
  * TCP layer on top of the Wi-Fi Direct group. The P2P client always dials the Group Owner; the
  * Group Owner runs a server bound to its own group address (so it is unreachable from other
- * networks). Every connection starts with a HELLO; data connections name their peer by device id.
+ * networks; if that bind keeps failing it falls back to all interfaces). Every connection starts
+ * with a HELLO; data connections name their peer by device id. Diagnostics use the tag "FlitLink".
  *
  * The engines register [onSender] (a peer that wants to send to us arrived: Receiver engine) and
  * [onReceiver] (a peer that can receive from us arrived: Send engine).
@@ -177,6 +212,7 @@ object Link {
 
     const val PORT = 47821
     private const val CONTROL_TIMEOUT = 15_000
+    private const val DIAL_DEADLINE_MS = 25_000L
 
     @Volatile
     var onSender: ((Peer) -> Unit)? = null
@@ -191,8 +227,10 @@ object Link {
     private val peers = ConcurrentHashMap<String, Peer>()
     private val use = AtomicInteger(0)
     private val connecting = AtomicBoolean(false)
+    private val retrying = AtomicBoolean(false)
     private var server: ServerSocket? = null
     private var bound: InetAddress? = null
+    private var gen = 0
     private var beat: Thread? = null
 
     fun myRole(): Int = if (sending) Proto.ROLE_SENDER else Proto.ROLE_RECEIVER
@@ -213,14 +251,33 @@ object Link {
     // ---- Group events (from P2p, main thread) -----------------------------------------------
 
     fun onGroup(info: WifiP2pInfo) {
+        Log.d(
+            TAG,
+            "onGroup: owner=${info.isGroupOwner} go=${info.groupOwnerAddress?.hostAddress} " +
+                "needLink=${use.get() > 0} role=${if (sending) "sender" else "receiver"}"
+        )
+        logIfaces()
         if (info.isGroupOwner) {
             startServer(info.groupOwnerAddress)
             return
         }
-        val host = info.groupOwnerAddress ?: return
-        if (use.get() <= 0) return
-        if (peers.values.any { it.alive && it.host == host }) return
-        if (!connecting.compareAndSet(false, true)) return
+        val host = info.groupOwnerAddress
+        if (host == null) {
+            Log.w(TAG, "onGroup: client without a Group Owner address yet, waiting for the next event")
+            return
+        }
+        if (use.get() <= 0) {
+            Log.d(TAG, "onGroup: ignored, nothing needs the link")
+            return
+        }
+        if (peers.values.any { it.alive && it.host == host }) {
+            Log.d(TAG, "onGroup: already connected to the Group Owner")
+            return
+        }
+        if (!connecting.compareAndSet(false, true)) {
+            Log.d(TAG, "onGroup: a dial is already running")
+            return
+        }
         Thread({
             try {
                 connect(host)
@@ -231,6 +288,7 @@ object Link {
     }
 
     fun onGroupLost() {
+        Log.d(TAG, "onGroupLost: closing ${peers.size} peer(s) and the server")
         for (p in peers.values) p.close()
         stopServer()
     }
@@ -242,6 +300,16 @@ object Link {
         val cur = server
         if (cur != null && !cur.isClosed && (addr == null || addr == bound)) return true
         stopServer()
+        if (bindOnce(addr)) return true
+        val g = gen
+        if (retrying.compareAndSet(false, true)) {
+            Thread({ retryBind(addr, g) }, "flit-bind").start()
+        }
+        return false
+    }
+
+    /** Must be called with the Link lock held. */
+    private fun bindOnce(addr: InetAddress?): Boolean {
         return try {
             val s = ServerSocket()
             s.reuseAddress = true
@@ -253,18 +321,44 @@ object Link {
                 it.isDaemon = true
                 it.start()
             }
+            Log.d(TAG, "server listening on ${addr?.hostAddress ?: "all interfaces"}:$PORT")
             true
         } catch (e: IOException) {
+            Log.w(TAG, "server bind failed on ${addr?.hostAddress}: ${e.javaClass.simpleName}: ${e.message}")
             false
+        }
+    }
+
+    /** The group interface may not carry its address yet: retry for ~6 s, then listen on all interfaces. */
+    private fun retryBind(addr: InetAddress?, g: Int) {
+        try {
+            var i = 0
+            while (i < 12) {
+                SystemClock.sleep(500)
+                synchronized(this) {
+                    if (gen != g) return
+                    if (server?.isClosed == false) return
+                    if (bindOnce(addr)) return
+                }
+                i++
+            }
+            synchronized(this) {
+                if (gen != g || server?.isClosed == false) return
+                if (bindOnce(null)) Log.w(TAG, "server bound to all interfaces as a fallback")
+            }
+        } finally {
+            retrying.set(false)
         }
     }
 
     @Synchronized
     fun stopServer() {
+        gen++
         try {
             server?.close()
         } catch (e: IOException) {
         }
+        if (server != null) Log.d(TAG, "server stopped")
         server = null
         bound = null
     }
@@ -273,6 +367,7 @@ object Link {
         while (!s.isClosed) {
             try {
                 val sock = s.accept()
+                Log.d(TAG, "accepted TCP from ${sock.inetAddress?.hostAddress}")
                 Thread({ handshake(sock) }, "flit-hs").start()
             } catch (e: IOException) {
                 break
@@ -284,9 +379,15 @@ object Link {
         try {
             val c = Conn(sock, 5000)
             val h = Proto.parseHello(c.read())
+            Log.d(TAG, "handshake: HELLO from '${h.name}' kind=${if (h.kind == Proto.KIND_DATA) "data" else "control"} role=${h.role}")
             if (h.kind == Proto.KIND_DATA) {
                 val p = peers[h.id]
-                if (p == null || !p.alive) c.close() else p.attach(c)
+                if (p == null || !p.alive) {
+                    Log.w(TAG, "handshake: data connection from an unknown peer, closing")
+                    c.close()
+                } else {
+                    p.attach(c)
+                }
                 return
             }
             val p = Peer(c, sock.inetAddress, false, h)
@@ -296,11 +397,13 @@ object Link {
             sendAvatar(p)
             dispatch(p)
         } catch (e: IOException) {
+            Log.w(TAG, "handshake failed: ${e.javaClass.simpleName}: ${e.message}")
             try {
                 sock.close()
             } catch (x: Exception) {
             }
         } catch (e: RuntimeException) {
+            Log.w(TAG, "handshake crashed: ${e.javaClass.simpleName}: ${e.message}")
             try {
                 sock.close()
             } catch (x: Exception) {
@@ -310,9 +413,32 @@ object Link {
 
     // ---- Client ------------------------------------------------------------------------------
 
+    /** The Wi-Fi Direct network, if Android exposes it (lets us pin sockets to it). */
+    @Suppress("DEPRECATION")
+    private fun p2pNetwork(): Network? {
+        return try {
+            val cm = FlitApp.app.getSystemService(ConnectivityManager::class.java) ?: return null
+            for (n in cm.allNetworks) {
+                val name = cm.getLinkProperties(n)?.interfaceName ?: continue
+                if (name.contains("p2p")) return n
+            }
+            null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun socketTo(host: InetAddress): Socket {
         val s = Socket()
         try {
+            val net = p2pNetwork()
+            if (net != null) {
+                try {
+                    net.bindSocket(s)
+                } catch (e: IOException) {
+                    Log.w(TAG, "could not pin the socket to the Wi-Fi Direct network: ${e.message}")
+                }
+            }
             val sb = Tuning.sockBuf
             if (sb > 0) {
                 s.receiveBufferSize = sb
@@ -331,35 +457,46 @@ object Link {
 
     /** Blocking (call off the main thread): opens the control connection to the Group Owner. */
     private fun connect(host: InetAddress) {
+        Log.d(TAG, "dial: ${host.hostAddress}:$PORT")
+        val t0 = SystemClock.elapsedRealtime()
         var tries = 0
-        while (tries < 15 && use.get() > 0) {
+        while (SystemClock.elapsedRealtime() - t0 < DIAL_DEADLINE_MS && use.get() > 0) {
             try {
                 val c = Conn(socketTo(host), 5000)
                 c.send(Proto.HELLO, Proto.hello(myRole(), Proto.KIND_CONTROL))
                 val h = Proto.parseHello(c.read())
                 if (h.kind != Proto.KIND_CONTROL) {
+                    Log.w(TAG, "dial: unexpected HELLO kind from the Group Owner")
                     c.close()
                     return
                 }
                 c.sock.soTimeout = CONTROL_TIMEOUT
                 val p = Peer(c, host, true, h)
+                Log.d(TAG, "dial: connected to '${h.name}' after ${tries + 1} attempt(s)")
                 register(p)
                 sendAvatar(p)
                 dispatch(p)
                 return
             } catch (e: IOException) {
                 tries++ // the Group Owner's server may not be up yet
+                Log.w(TAG, "dial attempt $tries failed: ${e.javaClass.simpleName}: ${e.message}")
                 SystemClock.sleep(700)
             } catch (e: RuntimeException) {
+                Log.w(TAG, "dial crashed: ${e.javaClass.simpleName}: ${e.message}")
                 return
             }
         }
+        Log.w(TAG, "dial: gave up after $tries attempt(s) (needLink=${use.get() > 0})")
     }
 
     // ---- Peers -------------------------------------------------------------------------------
 
     private fun register(p: Peer) {
-        peers.put(p.id, p)?.close()
+        val old = peers.put(p.id, p)
+        if (old != null) {
+            Log.w(TAG, "register: replacing an existing control connection of '${p.name}'")
+            old.close()
+        }
         ensureBeat()
     }
 
@@ -369,12 +506,28 @@ object Link {
 
     private fun dispatch(p: Peer) {
         val h = if (p.role == Proto.ROLE_SENDER) onSender else onReceiver
+        Log.d(TAG, "dispatch: '${p.name}' is a ${if (p.role == Proto.ROLE_SENDER) "sender" else "receiver"}, handler=${h != null}")
         if (h == null) p.close() else h(p)
     }
 
     fun closeAll() {
         for (p in peers.values) p.close()
         stopServer()
+    }
+
+    private fun logIfaces() {
+        try {
+            val all = NetworkInterface.getNetworkInterfaces() ?: return
+            for (ni in Collections.list(all)) {
+                if (!ni.isUp) continue
+                val n = ni.name
+                if (n.contains("p2p") || n.startsWith("wlan")) {
+                    val ips = Collections.list(ni.inetAddresses).joinToString { it.hostAddress ?: "?" }
+                    Log.d(TAG, "iface $n: $ips")
+                }
+            }
+        } catch (e: Exception) {
+        }
     }
 
     /** One daemon thread pings every peer every 5 s while any control connection exists. */
