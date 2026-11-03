@@ -41,6 +41,7 @@ object P2p {
     private const val SERVICE = "_flit._tcp"
     private const val READVERTISE_MS = 75_000L
     private const val LOSS_CONFIRM_MS = 2500L
+    private const val PEER_WAIT_POLLS = 14
 
     class Found(val address: String, val id: String, val name: String, val rev: Int)
 
@@ -532,10 +533,11 @@ object P2p {
      * Invites the device [address]. [done] reports whether the invitation was started (not whether
      * the Receiver accepted: that arrives as a group event, then a TCP connection).
      *
-     * Before inviting, the stack is brought to a known state by chaining the calls (each waits for
-     * the previous one): stop discovery, clear service requests, cancel a half-started connection,
-     * and remove a stale group that has no live peers. BUSY / ERROR are then retried; the reason is
-     * kept in [lastFail].
+     * Android rejects an invitation (reason ERROR) when the target is not in its current peer list,
+     * and some chipsets empty that list when peer discovery is stopped. So before inviting, peer
+     * discovery is (re)started and we wait until the target shows up in the list. Discovery is NOT
+     * stopped before the invitation. A half-started connection and a stale group (with no live
+     * peers) are cleared first. BUSY / ERROR are retried; the reason is kept in [lastFail].
      */
     fun connect(address: String, tries: Int = 8, done: (Boolean) -> Unit) {
         if (mgr == null || ch == null) {
@@ -546,7 +548,7 @@ object P2p {
         }
         lastFail = ""
         Log.d(TAG, "connect: preparing invitation to ${mask(address)}")
-        prepare { attempt(address, tries, 1, done) }
+        prepare { ensurePeer(address) { attempt(address, tries, 1, done) } }
     }
 
     private fun prepare(next: () -> Unit) {
@@ -572,22 +574,66 @@ object P2p {
         }
         later(3000L, guard)
         try {
-            m.stopPeerDiscovery(c, step {
-                m.clearServiceRequests(c, step {
-                    m.cancelConnect(c, step {
-                        m.requestGroupInfo(c) { g ->
-                            if (g != null && !Link.hasPeers()) {
-                                Log.d(TAG, "connect: removing a stale group first")
-                                m.removeGroup(c, step { go() })
-                            } else {
-                                go()
-                            }
-                        }
-                    })
-                })
+            m.cancelConnect(c, step {
+                m.requestGroupInfo(c) { g ->
+                    if (g != null && !Link.hasPeers()) {
+                        Log.d(TAG, "connect: removing a stale group first")
+                        m.removeGroup(c, step { go() })
+                    } else {
+                        go()
+                    }
+                }
             })
         } catch (e: SecurityException) {
             go()
+        }
+    }
+
+    /** Restarts peer discovery and waits (up to ~10 s) until [address] is in the framework's peer list. */
+    private fun ensurePeer(address: String, next: () -> Unit) {
+        val m = mgr
+        val c = ch
+        if (m == null || c == null) {
+            next()
+            return
+        }
+        try {
+            m.discoverPeers(c, noop)
+        } catch (e: SecurityException) {
+            next()
+            return
+        }
+        pollPeer(address, PEER_WAIT_POLLS, next)
+    }
+
+    private fun pollPeer(address: String, left: Int, next: () -> Unit) {
+        val m = mgr
+        val c = ch
+        if (m == null || c == null) {
+            next()
+            return
+        }
+        try {
+            m.requestPeers(c) { list ->
+                val present = list != null && list.deviceList.any { it.deviceAddress == address }
+                if (present) {
+                    Log.d(TAG, "connect: target is in the peer list")
+                    next()
+                } else if (left <= 0) {
+                    Log.w(TAG, "connect: target never appeared in the peer list, trying anyway")
+                    next()
+                } else {
+                    if (left % 4 == 0) {
+                        try {
+                            mgr?.discoverPeers(ch, noop)
+                        } catch (e: SecurityException) {
+                        }
+                    }
+                    later(700L, Runnable { pollPeer(address, left - 1, next) })
+                }
+            }
+        } catch (e: SecurityException) {
+            next()
         }
     }
 
@@ -619,7 +665,9 @@ object P2p {
                                 done(false)
                             } else {
                                 try {
-                                    mm.cancelConnect(cc, step { attempt(address, tries - 1, n + 1, done) })
+                                    mm.cancelConnect(cc, step {
+                                        ensurePeer(address) { attempt(address, tries - 1, n + 1, done) }
+                                    })
                                 } catch (e: SecurityException) {
                                     lastFail = "permission"
                                     done(false)
