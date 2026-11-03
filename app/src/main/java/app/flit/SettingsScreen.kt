@@ -1,6 +1,8 @@
 package app.flit
 
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -15,7 +17,6 @@ import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -90,7 +91,11 @@ object Avatar {
     }
 }
 
-/** Settings: four cards (Custom profile, Language, Theme, Rate). */
+/**
+ * Settings: four cards (Custom profile, Language, Theme, Rate).
+ * Hidden: a long-press on the "Settings" title opens the transfer tuning panel (developer use,
+ * removable before the final release).
+ */
 class SettingsScreen(act: MainActivity) : Screen(act) {
 
     private val profileSub = Ui.label(act, "", 13f, Ui.cText2)
@@ -100,7 +105,12 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
     init {
         val col = LinearLayout(act)
         col.orientation = LinearLayout.VERTICAL
-        col.addView(topBar(act, act.getString(R.string.settings_title)) { act.pop() }, Ui.lin(Ui.MATCH, Ui.WRAP))
+        val bar = topBar(act, act.getString(R.string.settings_title)) { act.pop() }
+        bar.getChildAt(1)?.setOnLongClickListener {
+            tuning()
+            true
+        }
+        col.addView(bar, Ui.lin(Ui.MATCH, Ui.WRAP))
 
         val list = LinearLayout(act)
         list.orientation = LinearLayout.VERTICAL
@@ -164,6 +174,71 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
                 act.recreate()
             }
         }
+    }
+
+    // ---- Hidden tuning panel -------------------------------------------------------------
+
+    private fun tuningRow(title: String, value: () -> String, next: () -> Unit): LinearLayout {
+        val row = LinearLayout(act)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.background = Ui.ripple(null, 12)
+        row.setPadding(Ui.dp(4), 0, Ui.dp(4), 0)
+        val v = Ui.label(act, value(), 14f, Ui.cText, true)
+        row.addView(Ui.label(act, title, 14f, Ui.cText), Ui.lin(0, Ui.WRAP, 1f))
+        row.addView(v, Ui.lin(Ui.WRAP, Ui.WRAP))
+        row.setOnClickListener {
+            next()
+            v.text = value()
+        }
+        return row
+    }
+
+    private fun intRow(title: String, key: String, def: Int, values: IntArray, fmt: (Int) -> String): LinearLayout =
+        tuningRow(title, { fmt(Prefs.int(key, def)) }) {
+            val i = values.indexOf(Prefs.int(key, def))
+            Prefs.putInt(key, values[(i + 1) % values.size])
+        }
+
+    private fun flagRow(title: String, key: String, def: Boolean): LinearLayout =
+        tuningRow(title, { if (Prefs.flag(key, def)) "on" else "off" }) {
+            Prefs.setFlag(key, !Prefs.flag(key, def))
+        }
+
+    private fun tuning() {
+        val col = LinearLayout(act)
+        col.orientation = LinearLayout.VERTICAL
+        fun add(v: LinearLayout) = col.addView(v, Ui.lin(Ui.MATCH, Ui.dp(48)))
+
+        add(intRow("Data streams", "t_streams", 0, intArrayOf(0, 1, 2, 3, 4)) { if (it == 0) "auto" else "$it" })
+        add(intRow("Chunk size", "t_chunk", 2048, intArrayOf(1024, 2048, 4096, 8192)) { "$it KiB" })
+        add(intRow("I/O buffer", "t_buf", if (Tuning.lowRam) 64 else 128, intArrayOf(64, 128, 256, 512)) { "$it KiB" })
+        add(intRow("Requests per stream", "t_out", 2, intArrayOf(1, 2, 3, 4)) { "$it" })
+        add(intRow("Socket buffer", "t_sockbuf", 0, intArrayOf(0, 256, 512, 1024)) { if (it == 0) "OS default" else "$it KiB" })
+        add(flagRow("Preallocate (fallocate)", "t_falloc", true))
+        add(flagRow("Request 5 GHz group (Android 10+)", "t_band5", false))
+
+        val note = Ui.label(act, "Applies to the next transfer. Last receives (newest first):", 12f, Ui.cText2)
+        col.addView(note, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(14) })
+        val last = Tuning.lastResults().ifBlank { "-" }
+        val res = Ui.label(act, last, 11.5f, Ui.cText)
+        res.setLineSpacing(0f, 1.1f)
+        col.addView(res, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(6) })
+
+        val sv = ScrollView(act)
+        sv.addView(col, FrameLayout.LayoutParams(Ui.MATCH, Ui.WRAP))
+        val h = (act.resources.displayMetrics.heightPixels * 0.5f).toInt()
+        val wrap = FrameLayout(act)
+        wrap.addView(sv, FrameLayout.LayoutParams(Ui.MATCH, h))
+
+        Dialogs.custom(
+            act, act.getString(R.string.dev_title), wrap,
+            act.getString(R.string.dev_copy), {
+                val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                cm?.setPrimaryClip(ClipData.newPlainText("Flit tuning", Tuning.lastResults()))
+            },
+            act.getString(R.string.dialog_ok), null
+        )
     }
 
     override fun onShow() {
