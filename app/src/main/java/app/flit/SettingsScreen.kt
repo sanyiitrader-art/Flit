@@ -10,6 +10,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
+import android.os.Build
 import android.text.InputFilter
 import android.text.InputType
 import android.view.Gravity
@@ -20,6 +21,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import java.io.FileOutputStream
 import java.io.InputStream
 
@@ -93,8 +95,8 @@ object Avatar {
 
 /**
  * Settings: four cards (Custom profile, Language, Theme, Rate).
- * Hidden: a long-press on the "Settings" title opens the transfer tuning panel (developer use,
- * removable before the final release).
+ * Hidden: a long-press on the "Settings" title opens the developer panel (transfer tuning and the
+ * "Connection log" copy button). Removable before the final release.
  */
 class SettingsScreen(act: MainActivity) : Screen(act) {
 
@@ -176,7 +178,7 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
         }
     }
 
-    // ---- Hidden tuning panel -------------------------------------------------------------
+    // ---- Hidden developer panel ------------------------------------------------------------
 
     private fun tuningRow(title: String, value: () -> String, next: () -> Unit): LinearLayout {
         val row = LinearLayout(act)
@@ -205,18 +207,50 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
             Prefs.setFlag(key, !Prefs.flag(key, def))
         }
 
+    /**
+     * Copies Flit's own connection log (tags FlitP2p, FlitLink, FlitSend) to the clipboard. Android
+     * lets an app read its own log lines without any permission. Nothing is sent anywhere.
+     */
+    private fun copyLog() {
+        Toast.makeText(act, "Collecting log...", Toast.LENGTH_SHORT).show()
+        FlitApp.io.execute {
+            val body = try {
+                val pb = ProcessBuilder(
+                    "logcat", "-d", "-v", "time", "-s", "FlitP2p:D", "FlitLink:D", "FlitSend:D"
+                )
+                pb.redirectErrorStream(true)
+                val p = pb.start()
+                val s = p.inputStream.bufferedReader().use { it.readText() }
+                p.destroy()
+                s
+            } catch (e: Exception) {
+                "could not read the log: " + e.message
+            }
+            val lines = body.lines().filter { it.isNotBlank() }.takeLast(200)
+            val text = "Flit log | " + Build.MANUFACTURER + " " + Build.MODEL +
+                " | Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")\n" +
+                (if (lines.isEmpty()) "(no connection log yet: try a send first)" else lines.joinToString("\n"))
+            FlitApp.main.post {
+                val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                cm?.setPrimaryClip(ClipData.newPlainText("Flit log", text))
+                Toast.makeText(act, "Log copied (" + lines.size + " lines). Paste it into a message.", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     private fun tuning() {
         val col = LinearLayout(act)
         col.orientation = LinearLayout.VERTICAL
         fun add(v: LinearLayout) = col.addView(v, Ui.lin(Ui.MATCH, Ui.dp(48)))
 
+        add(tuningRow("Connection log", { "tap to copy" }) { copyLog() })
         add(intRow("Data streams", "t_streams", 0, intArrayOf(0, 1, 2, 3, 4)) { if (it == 0) "auto" else "$it" })
         add(intRow("Chunk size", "t_chunk", 2048, intArrayOf(1024, 2048, 4096, 8192)) { "$it KiB" })
         add(intRow("I/O buffer", "t_buf", if (Tuning.lowRam) 64 else 128, intArrayOf(64, 128, 256, 512)) { "$it KiB" })
         add(intRow("Requests per stream", "t_out", 2, intArrayOf(1, 2, 3, 4)) { "$it" })
         add(intRow("Socket buffer", "t_sockbuf", 0, intArrayOf(0, 256, 512, 1024)) { if (it == 0) "OS default" else "$it KiB" })
         add(flagRow("Preallocate (fallocate)", "t_falloc", true))
-        add(flagRow("Request 5 GHz group (Android 10+)", "t_band5", false))
+        add(flagRow("Request 5 GHz group (no effect now)", "t_band5", false))
 
         val note = Ui.label(act, "Applies to the next transfer. Last receives (newest first):", 12f, Ui.cText2)
         col.addView(note, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(14) })
