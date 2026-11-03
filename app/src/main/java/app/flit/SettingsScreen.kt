@@ -229,7 +229,8 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
             val lines = body.lines().filter { it.isNotBlank() }.takeLast(200)
             val text = "Flit log | " + Build.MANUFACTURER + " " + Build.MODEL +
                 " | Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")\n" +
-                (if (lines.isEmpty()) "(no connection log yet: try a send first)" else lines.joinToString("\n"))
+                                (if (lines.isEmpty()) "(no connection log yet: try a send first)" else lines.joinToString("\n")) +
+                "\n\nLast receives:\n" + Tuning.lastResults().ifBlank { "-" }
             FlitApp.main.post {
                 val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                 cm?.setPrimaryClip(ClipData.newPlainText("Flit log", text))
@@ -268,8 +269,7 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
         Dialogs.custom(
             act, act.getString(R.string.dev_title), wrap,
             act.getString(R.string.dev_copy), {
-                val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                cm?.setPrimaryClip(ClipData.newPlainText("Flit tuning", Tuning.lastResults()))
+                val cm =             act.getString(R.string.dev_copy), { copyLog() },
             },
             act.getString(R.string.dialog_ok), null
         )
