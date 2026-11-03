@@ -96,7 +96,7 @@ object Avatar {
 /**
  * Settings: four cards (Custom profile, Language, Theme, Rate).
  * Hidden: a long-press on the "Settings" title opens the developer panel (transfer tuning and the
- * "Connection log" copy button). Removable before the final release.
+ * connection log copy buttons). Removable before the final release.
  */
 class SettingsScreen(act: MainActivity) : Screen(act) {
 
@@ -208,10 +208,11 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
         }
 
     /**
-     * Copies Flit's own connection log (tags FlitP2p, FlitLink, FlitSend) to the clipboard. Android
-     * lets an app read its own log lines without any permission. Nothing is sent anywhere.
+     * Copies Flit's own connection log (tags FlitP2p, FlitLink, FlitSend) plus the last transfer
+     * speed results to the clipboard. Android lets an app read its own log lines without any
+     * permission. Nothing is sent anywhere.
      */
-        private fun copyLog() {
+    private fun copyLog() {
         Toast.makeText(act, "Collecting log...", Toast.LENGTH_SHORT).show()
         FlitApp.io.execute {
             val body = try {
@@ -269,9 +270,7 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
 
         Dialogs.custom(
             act, act.getString(R.string.dev_title), wrap,
-            act.getString(R.string.dev_copy), {
-                val cm =             act.getString(R.string.dev_copy), { copyLog() },
-            },
+            act.getString(R.string.dev_copy), { copyLog() },
             act.getString(R.string.dialog_ok), null
         )
     }
