@@ -6,27 +6,50 @@ import android.app.NotificationManager
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
+import java.io.File
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
  * Process entry point. Initialises the small singletons and the notification channels.
  * Nothing heavy happens here: the database opens lazily on its own thread.
+ * Also installs a crash recorder (temporary, for diagnostics): the stack trace of an uncaught
+ * exception is written to a small file just before the app dies, so it can be read after restart.
  */
 class FlitApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
         app = this
+        installCrashRecorder()
         Prefs.init(this)
         Db.init(this)
         createChannels()
+    }
+
+    private fun installCrashRecorder() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                val sw = StringWriter()
+                e.printStackTrace(PrintWriter(sw))
+                val text = "thread: " + t.name + "\n" + sw.toString().take(4000)
+                Log.e("FlitCrash", text)
+                File(filesDir, CRASH_FILE).writeText(text)
+            } catch (x: Throwable) {
+            }
+            previous?.uncaughtException(t, e)
+        }
     }
 
     companion object {
         const val CH_REQUESTS = "flit_requests"
         const val CH_PROGRESS = "flit_progress"
         const val CH_RESULTS = "flit_results"
+        const val CRASH_FILE = "last_crash.txt"
 
         lateinit var app: FlitApp
             private set
