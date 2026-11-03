@@ -1,13 +1,16 @@
 package app.flit
 
 import android.app.Activity
+import android.app.Dialog
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.View
 import android.widget.FrameLayout
+import java.util.Locale
 
 /** Base class of every full screen. Screens are plain Views swapped inside [MainActivity]. */
 abstract class Screen(val act: MainActivity) : FrameLayout(act) {
@@ -25,14 +28,19 @@ abstract class Screen(val act: MainActivity) : FrameLayout(act) {
 
 /**
  * The only Activity. Owns the screen stack, edge-to-edge window setup, permission and result
- * forwarding, and the layer that holds the floating bubble. Language and theme are applied in
+ * forwarding, the layer that holds the floating bubble, and the transfer hooks of [Xfer]
+ * (incoming-request dialog, completed screen). Language and theme are applied in
  * attachBaseContext, so changing either simply recreates this Activity.
  */
-class MainActivity : Activity() {
+class MainActivity : Activity(), Xfer.Hook {
 
     private lateinit var container: FrameLayout
     private lateinit var layer: FrameLayout
     private val stack = ArrayList<Screen>()
+
+    private var inDialog: Dialog? = null
+    private var inFor: Pending? = null
+    private val rxStart = HashMap<RxSession, Long>()
 
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(Ui.wrap(base))
@@ -42,6 +50,8 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         Ui.load(this)
         edgeToEdge()
+        Xfer.ensure()
+        Xfer.hook = this
 
         val root = FrameLayout(this)
         root.setBackgroundColor(Ui.cBg)
@@ -52,14 +62,17 @@ class MainActivity : Activity() {
         Ui.fitSystem(root)
         setContentView(root)
 
-        Bubbles.attach(layer, { push(ReceiverScreen(this)) }, { })
+        Bubbles.attach(layer, { push(ReceiverScreen(this)) }, { Xfer.restore(this) })
 
         push(HomeScreen(this))
         if (Prefs.flag("reopen_settings")) {
             Prefs.setFlag("reopen_settings", false)
             push(SettingsScreen(this))
         }
-        if (savedInstanceState == null) root.post { Perms.startup(this) }
+        if (savedInstanceState == null) {
+            root.post { Perms.startup(this) }
+            root.post { handleGo(intent) }
+        }
 
         // After the first frame: start passive change tracking (no work until something changes),
         // and warm the app-label cache so Sender opens with labels already cached.
@@ -89,6 +102,8 @@ class MainActivity : Activity() {
 
     // ---- Navigation ----------------------------------------------------------------
 
+    fun top(): Screen? = stack.lastOrNull()
+
     fun push(s: Screen) {
         stack.lastOrNull()?.visibility = View.GONE
         stack.add(s)
@@ -108,6 +123,19 @@ class MainActivity : Activity() {
         top.onShow()
     }
 
+    /** Removes a screen wherever it is in the stack (the top one goes through [pop]). */
+    private fun removeScreen(s: Screen) {
+        val i = stack.indexOf(s)
+        if (i < 0) return
+        if (i == stack.size - 1) {
+            pop()
+            return
+        }
+        stack.removeAt(i)
+        container.removeView(s)
+        s.onDestroyed()
+    }
+
     private fun syncBubble() {
         Bubbles.suppress(stack.lastOrNull() is ReceiverScreen)
     }
@@ -119,17 +147,122 @@ class MainActivity : Activity() {
             return
         }
         Perms.gate(this) {
-            push(ReceiverScreen(this))
-            Rx.set(true)
+            if (Rx.set(true)) push(ReceiverScreen(this))
         }
     }
 
+    // ---- Notification taps -------------------------------------------------------------
+
+    private fun handleGo(i: Intent?) {
+        when (i?.getIntExtra(Notifs.EXTRA_GO, 0)) {
+            Notifs.GO_RECEIVER ->
+                if (Rx.active && stack.none { it is ReceiverScreen }) push(ReceiverScreen(this))
+            Notifs.GO_INCOMING -> incoming()
+            Notifs.GO_TRANSFER ->
+                if (Xfer.busy() && stack.none { it is TransferScreen }) Xfer.restore(this)
+        }
+        i?.removeExtra(Notifs.EXTRA_GO)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleGo(intent)
+    }
+
+    // ---- Xfer.Hook (main thread) -------------------------------------------------------
+
+    /** Shows the request at the head of the queue (one dialog at a time). */
+    override fun incoming() {
+        val p = ReceiveEngine.head() ?: return
+        if (isFinishing || isDestroyed) return
+        if (inFor === p && inDialog?.isShowing == true) return
+        inDialog?.dismiss()
+        inFor = p
+        val queued = ReceiveEngine.pending.size - 1
+        inDialog = Dialogs.incoming(
+            this, p.peer.name, p.req.count, p.req.total, queued,
+            {
+                inFor = null
+                inDialog = null
+                val s = ReceiveEngine.accept(p)
+                if (s != null) {
+                    rxStart[s] = SystemClock.elapsedRealtime()
+                    push(TransferScreen(this, s, null))
+                }
+            },
+            {
+                inFor = null
+                inDialog = null
+                ReceiveEngine.decline(p)
+            }
+        )
+    }
+
+    override fun incomingGone() {
+        inDialog?.dismiss()
+        inDialog = null
+        inFor = null
+    }
+
+    /** The receiving session ended: completed screen if files arrived, otherwise just back. */
+    override fun receiveFinished(s: RxSession) {
+        report(s)
+        for (sc in stack.toList()) if (sc is TransferScreen && sc.rx === s) removeScreen(sc)
+        if (isFinishing || isDestroyed) return
+        if (s.files.any { it.state == RecvFile.DONE }) push(CompletedScreen(this, s))
+    }
+
+    /** The send run ended: its transfer screen closes, leaving the Sender interface. */
+    override fun sendFinished(r: TxRun) {
+        for (sc in stack.toList()) if (sc is TransferScreen && sc.tx === r) removeScreen(sc)
+    }
+
+    /** Average speed of a finished receive (tuning panel). Includes connection set-up and pauses. */
+    private fun report(s: RxSession) {
+        val t0 = rxStart.remove(s) ?: return
+        val ms = SystemClock.elapsedRealtime() - t0
+        var bytes = 0L
+        var n = 0
+        for (f in s.files) {
+            if (f.state == RecvFile.DONE) {
+                bytes += f.size
+                n++
+            }
+        }
+        if (bytes <= 0L || ms < 500L) return
+        val mbs = bytes / 1_000_000.0 / (ms / 1000.0)
+        val streams = Prefs.int("t_streams", 0)
+        Tuning.report(
+            String.format(
+                Locale.US,
+                "%d files, %s in %.1f s = %.1f MB/s | chunk %d KiB, buf %d KiB, out %d, streams %s, " +
+                    "sockbuf %d KiB, 5GHz %b, simultaneous %b",
+                n, Types.size(bytes), ms / 1000.0, mbs,
+                Tuning.chunkSize / 1024, Tuning.bufSize / 1024, Tuning.outstanding,
+                if (streams == 0) "auto" else streams.toString(),
+                Tuning.sockBuf / 1024, Tuning.band5, Prefs.simultaneous
+            )
+        )
+    }
+
     // ---- Lifecycle and forwarding ------------------------------------------------------
+
+    override fun onStart() {
+        super.onStart()
+        Xfer.foreground = true
+    }
+
+    override fun onStop() {
+        Xfer.foreground = false
+        super.onStop()
+    }
 
     override fun onResume() {
         super.onResume()
         Perms.onResume(this)
         stack.lastOrNull()?.onShow()
+        if (ReceiveEngine.head() != null) incoming()
     }
 
     override fun onRequestPermissionsResult(
@@ -158,6 +291,10 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        inDialog?.dismiss()
+        inDialog = null
+        inFor = null
+        if (Xfer.hook === this) Xfer.hook = null
         Bubbles.detach(layer)
         super.onDestroy()
     }
