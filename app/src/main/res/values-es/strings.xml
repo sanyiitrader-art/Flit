@@ -140,6 +140,8 @@
     <string name="status_failed">ERROR</string>
     <string name="status_exists">YA EXISTE</string>
     <string name="status_paused">EN PAUSA</string>
+    <string name="status_declined">RECHAZADO</string>
+    <string name="status_stopped">DETENIDO</string>
 
     <!-- Almacenamiento agotado -->
     <string name="storage_full_title">SIN ESPACIO</string>
