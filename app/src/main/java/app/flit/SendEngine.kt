@@ -1,5 +1,6 @@
 package app.flit
 
+import android.util.Log
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -13,6 +14,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicIntegerArray
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicLongArray
+
+private const val TAG = "FlitSend"
 
 /** One file of a send run. [label] is the name shown in History; [hist] is false for split-APK parts. */
 class TxFile(
@@ -58,6 +61,10 @@ class TxSession(val run: TxRun, val target: P2p.Found) {
 
     @Volatile
     var state = CONNECTING
+
+    /** Internal reason of a failure (diagnostics only; the user sees a generic message). */
+    @Volatile
+    var why = ""
 
     @Volatile
     var peer: Peer? = null
@@ -223,6 +230,7 @@ class TxRun(val items: List<Item>) {
             for (s in sessions) s.prepare()
             ready = true
         }
+        Log.d(TAG, "manifest ready: ${list.size} files, $sum bytes, $miss missing")
         latch.countDown()
     }
 
@@ -254,6 +262,7 @@ class TxRun(val items: List<Item>) {
  * device can only negotiate one invitation at a time); each connected Receiver gets its own
  * [TxSession] with independent pause / stop. Data is pulled by the Receiver: this side answers
  * GET requests on any number of data connections, hashing every chunk while it streams it.
+ * Diagnostics use the log tag "FlitSend"; every failure records an internal reason.
  */
 object SendEngine {
 
@@ -274,13 +283,17 @@ object SendEngine {
         val c = cur
         if (c != null && !c.finished) return c
         Xfer.ensure()
-        if (!P2p.acquire()) return null
+        if (!P2p.acquire()) {
+            Log.w(TAG, "begin: Wi-Fi Direct could not be acquired")
+            return null
+        }
         val r = TxRun(items)
         cur = r
         queue.clear()
         Link.sending = true
         Link.use(true)
         Xfer.focusTx = r
+        Log.d(TAG, "begin: ${items.size} selected item(s)")
         Files.pool.execute { r.build() }
         h.postDelayed(object : Runnable {
             override fun run() {
@@ -301,6 +314,7 @@ object SendEngine {
     /** Sends the run to [targets]: invitations go out one by one. */
     fun send(targets: List<P2p.Found>) {
         val r = cur ?: return
+        Log.d(TAG, "send: ${targets.size} target(s): " + targets.joinToString { P2p.mask(it.address) })
         P2p.stopDiscovery()
         for (t in targets) {
             val s = TxSession(r, t)
@@ -314,6 +328,7 @@ object SendEngine {
     /** Abandons the run (the user left the discovery screen). */
     fun cancel() {
         val r = cur ?: return
+        Log.d(TAG, "cancel: run abandoned")
         if (!r.finished) finish(r)
     }
 
@@ -326,22 +341,31 @@ object SendEngine {
             connectNext(r)
             return
         }
+        Log.d(TAG, "connecting to '${s.target.name}' (${P2p.mask(s.target.address)})")
         P2p.connect(s.target.address) { ok ->
             if (!ok) {
-                fail(s)
+                fail(s, "invitation failed: ${P2p.lastFail}")
                 advance(r, s)
+            } else {
+                Log.d(TAG, "invitation sent to '${s.target.name}', waiting for the group and the TCP link")
             }
         }
         h.postDelayed({ advance(r, s) }, 8000L)
-        h.postDelayed({ if (s.state == TxSession.CONNECTING) fail(s) }, 45_000L)
+        h.postDelayed({
+            if (s.state == TxSession.CONNECTING) {
+                fail(s, "no control connection within 45 s (group not formed, or TCP dial failed)")
+            }
+        }, 45_000L)
     }
 
     private fun advance(r: TxRun, s: TxSession) {
         if (s.advanced.compareAndSet(false, true)) connectNext(r)
     }
 
-    private fun fail(s: TxSession) {
+    private fun fail(s: TxSession, why: String) {
         if (s.state == TxSession.CONNECTING || s.state == TxSession.REQUESTED) {
+            s.why = why
+            Log.w(TAG, "session with '${s.target.name}' failed (state=${s.state}): $why")
             s.state = TxSession.FAILED
             s.peer?.close()
             check(s.run)
@@ -353,27 +377,32 @@ object SendEngine {
         val r = cur
         val s = r?.byId?.get(peer.id)
         if (r == null || r.finished || s == null || s.peer != null || s.state != TxSession.CONNECTING) {
+            Log.w(
+                TAG,
+                "onPeer: rejecting '${peer.name}' (run=${r != null} finished=${r?.finished} " +
+                    "known=${s != null} hasPeer=${s?.peer != null} state=${s?.state})"
+            )
             peer.close()
             return
         }
+        Log.d(TAG, "onPeer: control connection to '${peer.name}' established")
         s.peer = peer
         peer.dataHandler = { c -> serve(s, c) }
         peer.startReader({ f -> onFrame(s, f) }, { onClosed(s) })
         h.post { advance(r, s) }
         if (!r.awaitReady(20_000L) || r.files.isEmpty()) {
-            s.state = TxSession.FAILED
+            fail(s, "manifest not ready or empty")
             peer.close()
-            check(r)
             return
         }
         s.state = TxSession.REQUESTED
         if (!peer.send(Proto.REQUEST, Proto.request(s.id, r.files.size, r.total, r.chunk))) return
+        Log.d(TAG, "REQUEST sent to '${peer.name}': ${r.files.size} files, ${r.total} bytes")
         h.postDelayed({
             if (s.state == TxSession.REQUESTED) {
                 peer.send(Proto.CANCEL, Proto.sid(s.id))
-                s.state = TxSession.FAILED
+                fail(s, "no answer to the request within 60 s")
                 peer.close()
-                check(r)
             }
         }, 60_000L)
     }
@@ -443,6 +472,8 @@ object SendEngine {
 
     private fun onClosed(s: TxSession) {
         if (s.state <= TxSession.ACTIVE) {
+            if (s.why.isEmpty()) s.why = "control connection closed (state=${s.state})"
+            Log.w(TAG, "control connection to '${s.name}' closed while state=${s.state}")
             s.state = if (s.state == TxSession.ACTIVE) TxSession.LOST else TxSession.FAILED
         }
         s.closeSrcs()
@@ -451,6 +482,7 @@ object SendEngine {
 
     private fun end(s: TxSession, st: Int) {
         if (s.state >= TxSession.DONE) return
+        Log.d(TAG, "session with '${s.name}' ended: state=$st")
         s.state = st
         s.closeSrcs()
         val p = s.peer
@@ -559,6 +591,9 @@ object SendEngine {
     private fun finish(r: TxRun) {
         if (!r.fin.compareAndSet(false, true)) return
         r.finished = true
+        for (s in r.sessions) {
+            Log.d(TAG, "finish: '${s.name}' state=${s.state} accepted=${s.accepted} why='${s.why}'")
+        }
         val files = r.files
         val n = files.size
         val okFid = BooleanArray(n)
