@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.wifi.p2p.WifiP2pInfo
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import java.io.ByteArrayOutputStream
@@ -44,8 +45,14 @@ private fun frameName(t: Int): String = when (t) {
 /**
  * One remote device with a live control connection. The control connection carries session
  * messages; any number of data connections (see [obtainData], [dial], [attach]) carry the bytes.
+ *
+ * Control messages are written by ONE dedicated thread per peer (in order). [send] only queues the
+ * message when called on the main thread, because Android forbids network writes there; from a
+ * background thread it writes directly (after anything already queued).
  */
 class Peer(val control: Conn, val host: InetAddress, val weAreClient: Boolean, h: Hello) {
+
+    private class Out(val type: Int, val body: ByteArray?)
 
     val id: String = h.id
     val name: String = h.name
@@ -70,20 +77,54 @@ class Peer(val control: Conn, val host: InetAddress, val weAreClient: Boolean, h
     private val closed = AtomicBoolean(false)
     private val streams = java.util.concurrent.CopyOnWriteArrayList<Conn>()
     private val dataQueue = LinkedBlockingQueue<Conn>()
+    private val outbox = LinkedBlockingQueue<Out>()
+    private val writerStarted = AtomicBoolean(false)
 
     @Volatile
     private var onClosed: (() -> Unit)? = null
 
-    fun send(type: Int, w: Wr? = null): Boolean {
+    private fun startWriter() {
+        if (!writerStarted.compareAndSet(false, true)) return
+        Thread({
+            try {
+                while (alive || outbox.isNotEmpty()) {
+                    val m = outbox.poll(500, TimeUnit.MILLISECONDS)
+                    if (m == null) {
+                        if (!alive) break
+                        continue
+                    }
+                    if (!write(m)) break
+                }
+            } catch (e: InterruptedException) {
+            }
+        }, "flit-ctl-out").also {
+            it.isDaemon = true
+            it.start()
+        }
+    }
+
+    /** Writes one message to the socket. Returns false (and closes the peer) on failure. */
+    private fun write(m: Out): Boolean {
         return try {
-            control.send(type, w)
-            if (type != Proto.PING && type != Proto.PONG) Log.d(TAG, "ctl >> ${frameName(type)} to $name")
+            control.sendRaw(m.type, m.body)
+            if (m.type != Proto.PING && m.type != Proto.PONG) Log.d(TAG, "ctl >> ${frameName(m.type)} to $name")
             true
         } catch (e: IOException) {
-            Log.w(TAG, "ctl >> ${frameName(type)} to $name failed: ${e.javaClass.simpleName}: ${e.message}")
+            Log.w(TAG, "ctl >> ${frameName(m.type)} to $name failed: ${e.javaClass.simpleName}: ${e.message}")
             close()
             false
         }
+    }
+
+    /**
+     * Queues a control message. Never touches the network on the calling thread, so it is safe to
+     * call from the UI. Returns false only if the peer is already closed.
+     */
+    fun send(type: Int, w: Wr? = null): Boolean {
+        if (!alive) return false
+        startWriter()
+        outbox.offer(Out(type, w?.toBytes()))
+        return true
     }
 
     /**
@@ -92,6 +133,7 @@ class Peer(val control: Conn, val host: InetAddress, val weAreClient: Boolean, h
      */
     fun startReader(onFrame: (Frame) -> Unit, onClosed: () -> Unit) {
         this.onClosed = onClosed
+        startWriter()
         Thread({
             try {
                 while (alive) {
@@ -185,11 +227,23 @@ class Peer(val control: Conn, val host: InetAddress, val weAreClient: Boolean, h
         if (!closed.compareAndSet(false, true)) return
         Log.d(TAG, "peer $name closed")
         alive = false
-        control.close()
-        for (s in streams) s.close()
-        streams.clear()
-        for (s in dataQueue) s.close()
-        dataQueue.clear()
+        // Give already queued messages (for example DECLINE, FINISHED) a moment to be written.
+        val q = outbox.isNotEmpty()
+        val shut = Runnable {
+            control.close()
+            for (s in streams) s.close()
+            streams.clear()
+            for (s in dataQueue) s.close()
+            dataQueue.clear()
+        }
+        if (q && Looper.myLooper() == Looper.getMainLooper()) {
+            Thread({
+                SystemClock.sleep(400)
+                shut.run()
+            }, "flit-close").start()
+        } else {
+            shut.run()
+        }
         Link.forget(this)
         onClosed?.invoke()
     }
