@@ -22,6 +22,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 
@@ -208,7 +209,7 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
         }
 
     /**
-     * Copies Flit's own connection log (tags FlitP2p, FlitLink, FlitSend) plus the last transfer
+     * Copies Flit's own connection log, the last crash (if the app crashed), and the last transfer
      * speed results to the clipboard. Android lets an app read its own log lines without any
      * permission. Nothing is sent anywhere.
      */
@@ -217,7 +218,8 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
         FlitApp.io.execute {
             val body = try {
                 val pb = ProcessBuilder(
-                    "logcat", "-d", "-v", "time", "-s", "FlitP2p:D", "FlitLink:D", "FlitSend:D"
+                    "logcat", "-d", "-v", "time", "-s",
+                    "FlitP2p:D", "FlitLink:D", "FlitSend:D", "FlitCrash:D", "AndroidRuntime:E"
                 )
                 pb.redirectErrorStream(true)
                 val p = pb.start()
@@ -227,12 +229,20 @@ class SettingsScreen(act: MainActivity) : Screen(act) {
             } catch (e: Exception) {
                 "could not read the log: " + e.message
             }
-            val lines = body.lines().filter { it.isNotBlank() }.takeLast(200)
+            val lines = body.lines().filter { it.isNotBlank() }.takeLast(220)
+            val crash = try {
+                val f = File(act.filesDir, FlitApp.CRASH_FILE)
+                if (f.isFile) f.readText() else "(none recorded)"
+            } catch (e: Exception) {
+                "(could not read)"
+            }
             val header = "Flit log | " + Build.MANUFACTURER + " " + Build.MODEL +
                 " | Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")"
             val logText = if (lines.isEmpty()) "(no connection log yet: try a send first)" else lines.joinToString("\n")
             val results = Tuning.lastResults().ifBlank { "-" }
-            val text = header + "\n" + logText + "\n\nLast receives:\n" + results
+            val text = header + "\n" + logText +
+                "\n\nLast crash:\n" + crash +
+                "\n\nLast receives:\n" + results
             FlitApp.main.post {
                 val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                 cm?.setPrimaryClip(ClipData.newPlainText("Flit log", text))
