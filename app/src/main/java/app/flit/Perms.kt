@@ -31,22 +31,17 @@ import com.google.android.gms.location.Priority
  *
  * Location SERVICES (the device toggle) and the Location PERMISSION (granted to Flit) are separate
  * steps. For the services toggle on API 28-32:
- *  1. If Google Play services is usable, Android's native "turn on Location" popup is shown
- *     (SettingsClient + ResolvableApiException). Declining it ends the step; no second dialog follows.
+ *  1. If Google Play services is usable, Android's native "turn on Location" popup is shown.
  *     When the user accepts, Android can take a moment to report Location as on, so the flow waits
  *     briefly and then trusts the accepted answer instead of cancelling.
- *  2. Otherwise (no/outdated/disabled Play services, or the API reports the change is unavailable)
- *     Flit's own LOCATION SERVICES dialog opens the full Location Settings screen.
+ *  2. Otherwise Flit's own dialog opens the full Location Settings screen.
  *
  * Wi-Fi off: Android's own Wi-Fi panel (API 29+) or Wi-Fi settings page (API 28) opens directly.
- * Flit never turns Wi-Fi or Location on silently.
+ * When the user comes back, the flow waits up to ~5 s for the setting to really turn on and then
+ * continues by itself (no second tap). Flit never turns Wi-Fi or Location on silently.
  *
- * Two flows share one small state machine, driven by the Activity forwarding [onResult],
- * [onActivityResult] and [onResume]:
- *  - [startup]: runs once per launch at the first-launch steps. Each step is attempted at most once
- *    per installation, so a denied permission is never nagged again at launch.
- *  - [gate]: runs before every discovery start and only asks for what is actually missing. Every
- *    call starts from a clean state.
+ *  - [startup]: runs once per launch at the first-launch steps.
+ *  - [gate]: runs before every discovery start and only asks for what is actually missing.
  */
 object Perms {
 
@@ -237,10 +232,6 @@ object Perms {
 
     // ---- Location services ---------------------------------------------------------------
 
-    /**
-     * Asks to turn Location services on. Uses the native Google Play services popup when it is
-     * available; otherwise falls back to Flit's own dialog (see [locationFallback]).
-     */
     private fun askLocation(a: Activity) {
         val now = SystemClock.elapsedRealtime()
         if (locBusy && now - locBusyAt < 15_000L) return // a check or popup is already in flight
@@ -265,7 +256,6 @@ object Perms {
                 }
                 if (t.isSuccessful) {
                     locBusy = false
-                    // Location is already satisfied; Android may just be slow to say so.
                     locTrust = true
                     locationDone(a, true)
                     return@addOnCompleteListener
@@ -301,7 +291,6 @@ object Perms {
         })
     }
 
-    /** Continues the running flow after the Location services step finished. */
     private fun locationDone(a: Activity, ok: Boolean) {
         when (mode) {
             MODE_STARTUP -> advance(a)
@@ -309,10 +298,6 @@ object Perms {
         }
     }
 
-    /**
-     * The user accepted the native popup. Android can take a moment to report Location as on, so
-     * wait up to ~2 s for it, then trust the accepted answer and continue (never cancel).
-     */
     private fun acceptedLocation(a: Activity, tries: Int) {
         if (mode == MODE_NONE) return
         if (a.isFinishing || a.isDestroyed) {
@@ -338,7 +323,6 @@ object Perms {
         if (result == Activity.RESULT_OK) {
             acceptedLocation(a, 0)
         } else {
-            // Declined (or the popup was dismissed). Continue only if Location is on anyway.
             locationDone(a, locationOn())
         }
         return true
@@ -381,14 +365,31 @@ object Perms {
         when (mode) {
             MODE_STARTUP -> advance(a)
             MODE_GATE -> {
-                val satisfied = when (w) {
-                    W_LOCSVC -> locationOn()
-                    W_WIFI -> wifiOn()
-                    else -> true
+                val check: () -> Boolean = when (w) {
+                    W_LOCSVC -> { { locationOn() } }
+                    W_WIFI -> { { wifiOn() } }
+                    else -> { { true } }
                 }
-                if (satisfied) gateStep(a) else cancel()
+                waitFor(a, check, 0)
             }
         }
+    }
+
+    /**
+     * Android needs a moment to switch Wi-Fi or Location on after the user did it. Poll for up to
+     * ~5 s, then continue the flow by itself; give up (cancel) only if it never turned on.
+     */
+    private fun waitFor(a: Activity, check: () -> Boolean, tries: Int) {
+        if (mode != MODE_GATE) return
+        if (check()) {
+            gateStep(a)
+            return
+        }
+        if (a.isFinishing || a.isDestroyed || tries >= 20) {
+            cancel()
+            return
+        }
+        FlitApp.main.postDelayed({ waitFor(a, check, tries + 1) }, 250L)
     }
 
     // ---- Helpers -------------------------------------------------------------------------
