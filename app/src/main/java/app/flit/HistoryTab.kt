@@ -17,6 +17,8 @@ import java.io.File
  * History tab: a tap-only Received / Sent switch (default Received) above a card list.
  * Entries are independent of the physical file: a missing file is greyed out and gets a Clear
  * button that removes only that entry. Entries cannot be selected or deleted otherwise.
+ * A split-APK app is ONE entry; its Install button installs the main APK together with its
+ * split parts (when they sit beside it), through Android's own installer.
  *
  * Live updates: while the tab is on screen it re-checks the files when MediaStore reports a change,
  * when an app is installed or removed (INSTALLED badge), and when anything changes inside
@@ -100,12 +102,10 @@ class HistoryTab(c: Context) : LinearLayout(c), Live {
 
     // ---- Live updates ------------------------------------------------------------------
 
-    /** Debounced change (media, files or packages). Re-checks the entries while on screen. */
     override fun onLive(kind: Int) {
         if (isShown) load()
     }
 
-    /** Watches Download/Flit, where received files live. Does nothing if the folder does not exist yet. */
     @Suppress("DEPRECATION")
     private fun watchFlit() {
         obs?.stopWatching()
@@ -266,7 +266,10 @@ class HistoryTab(c: Context) : LinearLayout(c), Live {
             r.action.filled = true
             r.action.restyle()
             r.action.visibility = View.VISIBLE
-            r.action.setOnClickListener { Files.open(context, e.path) }
+            r.action.setOnClickListener {
+                val a = context.findActivity() as? MainActivity
+                if (e.type == Types.APK && a != null) installApk(a, e.path) else Files.open(context, e.path)
+            }
         }
     }
 
