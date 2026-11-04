@@ -10,17 +10,17 @@ import androidx.recyclerview.widget.RecyclerView
 
 /**
  * Receiver's completed-transfer screen: X at the top-left, the total received size in the centre,
- * and every file of this transaction with its icon, name, size and action (Open / Play / Extract /
- * Install). Only files that arrived complete are listed.
+ * and every entry of this transaction with its icon, name, size and action (Open / Play / Extract /
+ * Install). Only entries that arrived complete are listed; a split-APK app is ONE entry.
  */
 class CompletedScreen(act: MainActivity, s: RxSession) : Screen(act) {
 
-    private val items: List<RxFile> = s.files.filter { it.state == RecvFile.DONE }
+    private val items: List<RxRow> = s.rows.filter { it.state() == RecvFile.DONE }
     private val px: Int by lazy { Ui.dp(64) }
 
     init {
         var sum = 0L
-        for (f in items) sum += f.size
+        for (r in items) sum += r.size()
 
         val col = LinearLayout(act)
         col.orientation = LinearLayout.VERTICAL
@@ -56,11 +56,12 @@ class CompletedScreen(act: MainActivity, s: RxSession) : Screen(act) {
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH = VH(RowView(act, Icons.NOTE))
 
         override fun onBindViewHolder(h: VH, position: Int) {
-            val f = items[position]
+            val row = items[position]
+            val f = row.head
             val r = h.v as RowView
             r.reset()
             r.title.text = f.name
-            r.sub.text = Types.size(f.size)
+            r.sub.text = Types.size(row.size())
             val type = Types.typeOf(f.name)
             val path = f.dest.path
             when (type) {
