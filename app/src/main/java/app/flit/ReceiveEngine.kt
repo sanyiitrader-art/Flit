@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-/** An incoming request waiting for the user's decision. */
+/** An incoming request (kept for the queue API; requests are now started right away). */
 class Pending(val peer: Peer, val req: Req)
 
 /** One file of a receiving session. [rf] exists while the file is (or was) being written. */
@@ -28,6 +28,14 @@ class RxFile(val m: Man, val dest: File, val tmp: File, val key: String) {
     @Volatile
     var rf: RecvFile? = null
 
+    /** Part of a split-APK group (main APK or one of its parts). */
+    @Volatile
+    var grouped = false
+
+    /** A split part (not the main APK). */
+    @Volatile
+    var part = false
+
     val finishing = AtomicBoolean(false)
     val name: String = dest.name
     val size: Long
@@ -41,12 +49,44 @@ class RxFile(val m: Man, val dest: File, val tmp: File, val key: String) {
 }
 
 /**
+ * One displayed entry of a receiving session: a normal file, or a split-APK app (its main APK plus
+ * the parts, shown as ONE entry with combined size, progress and status).
+ */
+class RxRow(val head: RxFile, val parts: List<RxFile>, val dir: File?) {
+
+    val members: List<RxFile> = listOf(head) + parts
+
+    fun size(): Long {
+        var s = 0L
+        for (m in members) s += m.size
+        return s
+    }
+
+    fun bytes(): Long {
+        var s = 0L
+        for (m in members) s += m.bytes()
+        return s
+    }
+
+    /** Combined state, in terms of RecvFile.* constants. */
+    fun state(): Int {
+        if (members.any { it.state == RecvFile.FAILED }) return RecvFile.FAILED
+        if (members.all { it.state == RecvFile.DONE }) return RecvFile.DONE
+        if (members.any { it.state == RecvFile.ACTIVE }) return RecvFile.ACTIVE
+        if (members.any { it.state == RecvFile.STOPPED }) return RecvFile.STOPPED
+        if (members.any { it.state == RecvFile.DONE }) return RecvFile.ACTIVE
+        return RecvFile.WAITING
+    }
+}
+
+/**
  * One accepted transfer from one Sender. Logic in short:
  *  - Files are activated one at a time (or up to 4 with the Receiver toggle on).
  *  - A pool of 1..4 data streams pulls chunks from any active file; each stream keeps several GET
  *    requests in flight. A monitor thread adds or removes streams from measured throughput.
  *  - Every chunk is hashed while it is written; a file is renamed into place only when all chunks
  *    are verified. A failed file never stops the others.
+ *  - A split-APK app arrives as several files into one folder but is shown and recorded as ONE entry.
  */
 class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long, val chunk: Int) {
 
@@ -73,6 +113,10 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
 
     @Volatile
     var files: List<RxFile> = emptyList()
+
+    /** Displayed entries (see [RxRow]). */
+    @Volatile
+    var rows: List<RxRow> = emptyList()
 
     @Volatile
     var paused = false
@@ -154,17 +198,47 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
         }
     }
 
+    private fun fixed(m0: Man): Man = if (m0.size < 0L) Man(m0.fid, m0.rel, 0L, m0.mtime, m0.type) else m0
+
     private fun onManifestEnd() {
         if (state != WAIT) return
         val pd = Chunks.partialDir()
-        val list = ArrayList<RxFile>(manifest.size)
+        val n = manifest.size
+        val list = ArrayList<RxFile>(n)
+        val rl = ArrayList<RxRow>()
         var sum = 0L
-        for (m0 in manifest) {
-            val m = if (m0.size < 0L) Man(m0.fid, m0.rel, 0L, m0.mtime, m0.type) else m0
-            val dest = Chunks.reserve(m.rel)
-            val key = Chunks.key(peer.id, m.rel, m.size, m.mtime)
-            list.add(RxFile(m, dest, File(pd, "$key.part"), key))
-            sum += m.size
+        var i = 0
+        while (i < n) {
+            val m = fixed(manifest[i])
+            var j = i + 1
+            while (j < n && manifest[j].type == TYPE_PART) j++
+            val safe = Chunks.safeRel(m.rel)
+            if (j > i + 1 && m.type != TYPE_PART && safe.contains('/')) {
+                // A split-APK app: all its files go into one unique folder and are shown as one entry.
+                val dir = Chunks.reserve(safe.substringBefore('/'))
+                val members = ArrayList<RxFile>(j - i)
+                for (k in i until j) {
+                    val mk = fixed(manifest[k])
+                    val nm = Chunks.safeRel(mk.rel).substringAfterLast('/')
+                    val key = Chunks.key(peer.id, mk.rel, mk.size, mk.mtime)
+                    val rf = RxFile(mk, File(dir, nm), File(pd, "$key.part"), key)
+                    rf.grouped = true
+                    rf.part = k > i
+                    members.add(rf)
+                    sum += mk.size
+                }
+                list.addAll(members)
+                rl.add(RxRow(members[0], members.subList(1, members.size).toList(), dir))
+                i = j
+            } else {
+                val dest = Chunks.reserve(m.rel)
+                val key = Chunks.key(peer.id, m.rel, m.size, m.mtime)
+                val rf = RxFile(m, dest, File(pd, "$key.part"), key)
+                list.add(rf)
+                rl.add(RxRow(rf, emptyList(), null))
+                sum += m.size
+                i++
+            }
         }
         manifest.clear()
         if (list.isEmpty()) {
@@ -173,6 +247,7 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
         }
         bytesTotal = sum
         files = list
+        rows = rl
         state = RUN
         Thread({ monitor() }, "flit-rx-mon").start()
         spawn()
@@ -256,7 +331,6 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
         return null
     }
 
-    /** Opens the next waiting file if fewer than the allowed number are active. */
     private fun activateNext(): Boolean {
         synchronized(actLock) {
             val max = if (Prefs.simultaneous) Tuning.MAX_FILES else 1
@@ -337,7 +411,6 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
         }
     }
 
-    /** Reads one response (a CHUNK or an ERR). Any exception means the stream is no longer usable. */
     private fun readChunk(c: Conn, j: Job, buf: ByteArray, md: MessageDigest) {
         val din = c.din
         var resolved = false
@@ -366,7 +439,6 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
             if (fid != j.f.m.fid || idx != j.idx || len != 8 + expect + Proto.HASH) throw IOException("chunk mismatch")
 
             if (j.f.state != RecvFile.ACTIVE || j.f.rf !== j.rf) {
-                // The file failed or was restarted meanwhile: read the frame and drop it.
                 var left = expect + Proto.HASH
                 while (left > 0) {
                     val n = minOf(buf.size, left)
@@ -439,19 +511,23 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
         val root = rf.root
         val now = System.currentTimeMillis()
         val from = peer.name
+        val grouped = f.grouped
         Db.post {
             Db.deletePart(f.key)
-            val type = Types.typeOf(dest.name)
-            var pkg = ""
-            var vc = 0L
-            if (type == Types.APK) {
-                val m = Files.apkMeta(dest.path)
-                if (m != null) {
-                    pkg = m.first
-                    vc = m.second
+            // Split-APK groups are recorded once, as one entry, when the session ends.
+            if (!grouped) {
+                val type = Types.typeOf(dest.name)
+                var pkg = ""
+                var vc = 0L
+                if (type == Types.APK) {
+                    val m = Files.apkMeta(dest.path)
+                    if (m != null) {
+                        pkg = m.first
+                        vc = m.second
+                    }
                 }
+                Db.addHistory(Hist(0, Db.RECEIVED, dest.name, dest.path, size, type, Chunks.hex(root), now, pkg, vc, from))
             }
-            Db.addHistory(Hist(0, Db.RECEIVED, dest.name, dest.path, size, type, Chunks.hex(root), now, pkg, vc, from))
         }
         try {
             MediaScannerConnection.scanFile(FlitApp.app, arrayOf(dest.path), null, null)
@@ -546,12 +622,8 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
         if (!ended.compareAndSet(false, true)) return
         state = st
         for (w in workers) w.conn?.close()
-        var done = 0
-        var failed = 0
         for (f in files) {
             when (f.state) {
-                RecvFile.DONE -> done++
-                RecvFile.FAILED -> failed++
                 RecvFile.ACTIVE -> {
                     val rf = f.rf
                     if (rf != null) {
@@ -566,6 +638,38 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
             if (f.state != RecvFile.DONE) Chunks.unreserve(f.dest)
         }
         active.clear()
+
+        // Count and record by displayed entry (a split-APK app is one entry, complete only if all
+        // its files arrived).
+        var done = 0
+        var failed = 0
+        val now = System.currentTimeMillis()
+        val from = peer.name
+        for (row in rows) {
+            val s = row.state()
+            if (s == RecvFile.DONE) done++ else if (s == RecvFile.FAILED) failed++
+            row.dir?.let { Chunks.unreserve(it) }
+            if (row.parts.isNotEmpty() && s == RecvFile.DONE) {
+                val head = row.head
+                val dest = head.dest
+                val size = row.size()
+                val root = head.rf?.root ?: ByteArray(0)
+                Db.post {
+                    val type = Types.typeOf(dest.name)
+                    var pkg = ""
+                    var vc = 0L
+                    if (type == Types.APK) {
+                        val m = Files.apkMeta(dest.path)
+                        if (m != null) {
+                            pkg = m.first
+                            vc = m.second
+                        }
+                    }
+                    Db.addHistory(Hist(0, Db.RECEIVED, dest.name, dest.path, size, type, Chunks.hex(root), now, pkg, vc, from))
+                }
+            }
+        }
+
         if (st == DONE) {
             peer.send(Proto.FINISHED, Proto.sid(id))
             FlitApp.main.postDelayed({ peer.close() }, 1500L) // give the Sender time to read FINISHED
@@ -580,14 +684,15 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
 }
 
 /**
- * Receive side: the queue of incoming requests (one dialog at a time, via [Xfer.hook]) and the
- * running sessions (at most one per Sender).
+ * Receive side. The Android Wi-Fi Direct invitation already asked the user, so a request that
+ * arrives while Receiver mode is on starts at once (no second Flit dialog). Running sessions: at
+ * most one per Sender.
  */
 object ReceiveEngine {
 
     private val sessions = ConcurrentHashMap<String, RxSession>()
 
-    /** Main thread only. The head is the request currently shown to the user. */
+    /** Main thread only. Kept for the queue API; requests are no longer parked here. */
     val pending = ArrayList<Pending>()
 
     private val h = FlitApp.main
@@ -630,32 +735,31 @@ object ReceiveEngine {
     private fun enqueue(peer: Peer, rq: Req) {
         if (!peer.alive) return
         val ok = Rx.active && rq.count > 0 && rq.chunk in 65536..(16 shl 20) &&
-            !sessions.containsKey(peer.id) && pending.none { it.peer === peer }
+            !sessions.containsKey(peer.id)
         if (!ok) {
             peer.send(Proto.DECLINE, Proto.sid(rq.session))
             h.postDelayed({ peer.close() }, 1500L)
             return
         }
-        val p = Pending(peer, rq)
-        pending.add(p)
-        Notifs.incoming(peer.name)
-        if (pending.size == 1) Xfer.hook?.incoming()
-        h.postDelayed({ if (pending.contains(p)) decline(p, true) }, 90_000L)
+        // The system invitation already asked the user: start right away and show the transfer.
+        val s = accept(Pending(peer, rq)) ?: return
+        if (!Xfer.foreground) Notifs.incoming(peer.name)
+        Xfer.hook?.incoming()
+        if (s.isEnded) Notifs.clearIncoming()
     }
 
-    /** [gone]: the dialog for the head request may still be on screen and must be dismissed. */
     private fun remove(p: Pending, gone: Boolean) {
         val head = pending.firstOrNull() === p
         if (!pending.remove(p)) return
         if (head && gone) Xfer.hook?.incomingGone()
-        if (pending.isEmpty()) Notifs.clearIncoming() else if (head) Xfer.hook?.incoming()
+        if (pending.isEmpty()) Notifs.clearIncoming()
     }
 
     private fun dropPeer(peer: Peer) {
         for (p in pending.filter { it.peer === peer }) remove(p, true)
     }
 
-    /** The user accepted the request: starts the session. */
+    /** Starts the session for [p]. */
     fun accept(p: Pending): RxSession? {
         remove(p, false)
         if (!p.peer.alive || sessions.containsKey(p.peer.id)) return null
@@ -668,7 +772,6 @@ object ReceiveEngine {
         return s
     }
 
-    /** [expired]: not from the dialog (timeout or Receiver mode switched off). */
     fun decline(p: Pending, expired: Boolean = false) {
         remove(p, expired)
         p.peer.send(Proto.DECLINE, Proto.sid(p.req.session))
@@ -684,10 +787,10 @@ object ReceiveEngine {
             sessions.remove(s.peer.id, s)
             if (sessions.isEmpty()) Bubbles.transfer(false)
             if (Xfer.focusRx === s) Xfer.focusRx = null
+            Notifs.clearIncoming()
             if (st == RxSession.LOST) Notifs.interrupted()
             if (failed > 0) Notifs.failed(failed)
             if (done > 0 && !Xfer.foreground) Notifs.done(done)
-            // Back to being discoverable: leave the group once nothing else uses it.
             h.postDelayed({
                 if (Rx.active && sessions.isEmpty() && pending.isEmpty() && !Link.hasPeers()) {
                     P2p.leave()
