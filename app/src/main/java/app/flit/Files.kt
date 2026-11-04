@@ -1,12 +1,14 @@
 package app.flit
 
 import android.app.Activity
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.net.Uri
@@ -18,6 +20,7 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.core.content.FileProvider
 import java.io.File
+import java.io.FileInputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.LinkedBlockingQueue
@@ -71,6 +74,36 @@ class ApkFile(val path: String, val name: String, val size: Long) {
 /** One row of the Internal storage browser. */
 class Entry(val name: String, val path: String, val dir: Boolean, val size: Long, val restricted: Boolean)
 
+/**
+ * Receives the result of a split-APK install session. When Android needs the user's confirmation
+ * it hands us its own confirmation screen, which we simply start. No custom install UI.
+ */
+class InstallResult : BroadcastReceiver() {
+
+    @Suppress("DEPRECATION")
+    override fun onReceive(c: Context, i: Intent) {
+        when (i.getIntExtra(PackageInstaller.EXTRA_STATUS, -1)) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                val confirm: Intent? = if (Build.VERSION.SDK_INT >= 33) {
+                    i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+                } else {
+                    i.getParcelableExtra(Intent.EXTRA_INTENT)
+                }
+                if (confirm != null) {
+                    confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    try {
+                        c.startActivity(confirm)
+                    } catch (e: Exception) {
+                        Ui.toast(c, R.string.apk_install_failed)
+                    }
+                }
+            }
+            PackageInstaller.STATUS_SUCCESS, PackageInstaller.STATUS_FAILURE_ABORTED -> {}
+            else -> Ui.toast(c, R.string.apk_install_failed)
+        }
+    }
+}
+
 /** Storage statistics, MediaStore and PackageManager queries, directory listing, opening files. */
 object Files {
 
@@ -119,10 +152,6 @@ object Files {
     private val fire: Array<Runnable> = Array(5) { k -> Runnable { for (l in ArrayList(live)) l.onLive(k) } }
     private var watching = false
 
-    /**
-     * Increments immediately whenever a change is reported for this kind, so a screen that is not
-     * visible can still tell "something changed" the next time it is shown. Main thread.
-     */
     fun version(kind: Int): Int = ver[kind.coerceIn(0, 4)]
 
     fun addLive(l: Live) {
@@ -133,18 +162,13 @@ object Files {
         live.remove(l)
     }
 
-    /** Records the change now, notifies listeners once things have been quiet for 800 ms. */
     private fun changed(kind: Int) {
         ver[kind]++
         FlitApp.main.removeCallbacks(fire[kind])
         FlitApp.main.postDelayed(fire[kind], 800L)
     }
 
-    /**
-     * Starts passive change tracking: MediaStore observers (images, video, audio, all files) and
-     * package install/update/remove broadcasts. Nothing runs until Android reports a change.
-     * Safe to call repeatedly. Observers need no permission.
-     */
+    /** Starts passive change tracking (MediaStore observers and package broadcasts). Safe to repeat. */
     fun watch() {
         if (watching) return
         watching = true
@@ -175,7 +199,6 @@ object Files {
         filter.addDataScheme("package")
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(c: Context, i: Intent) {
-                // An uninstalled app can no longer be sent: drop it from the selection.
                 if (i.action == Intent.ACTION_PACKAGE_REMOVED && !i.getBooleanExtra(Intent.EXTRA_REPLACING, false)) {
                     i.data?.schemeSpecificPart?.let { Sel.remove(Sel.appKey(it)) }
                 }
@@ -194,11 +217,6 @@ object Files {
 
     // ---- MediaStore ----------------------------------------------------------------
 
-    /**
-     * Newest first. Runs ONE query and streams the rows in chunks (150, then 800 at a time) so the
-     * first screenful can be shown before the rest has been read. [emit] is called on the calling
-     * (background) thread; the lists it receives are never reused. Needs storage access.
-     */
     @Suppress("DEPRECATION")
     fun streamMedia(kind: Int, cancelled: () -> Boolean, emit: (List<Media>) -> Unit) {
         val t0 = SystemClock.elapsedRealtime()
@@ -239,9 +257,6 @@ object Files {
                 if (chunk.size >= limit) {
                     total += chunk.size
                     emit(chunk)
-                    if (total == FIRST_CHUNK) {
-                        Log.d(TAG, "media kind=$kind first chunk ${SystemClock.elapsedRealtime() - t0} ms")
-                    }
                     chunk = ArrayList(NEXT_CHUNK)
                     limit = NEXT_CHUNK
                     if (cancelled()) return
@@ -256,7 +271,6 @@ object Files {
 
     private class Meta(val label: String, val size: Long)
 
-    /** Label and size cache. The key changes when an app is updated (new install path) or the language changes. */
     private val metaCache = ConcurrentHashMap<String, Meta>()
 
     private fun metaOf(pm: PackageManager, ai: ApplicationInfo): Meta {
@@ -290,7 +304,6 @@ object Files {
         return out.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
     }
 
-    /** Packages that have a launcher (or info) activity: ONE query instead of one per app. */
     private fun launchables(pm: PackageManager): Set<String> {
         val set = HashSet<String>()
         for (cat in arrayOf(Intent.CATEGORY_LAUNCHER, Intent.CATEGORY_INFO)) {
@@ -303,11 +316,6 @@ object Files {
         return set
     }
 
-    /**
-     * Fast pass for the Apps tab: the full list of user apps with labels (cached, parallel), and the
-     * launchable system apps WITHOUT labels. System labels are only needed when that collapsed
-     * section is opened: see [systemEntries].
-     */
     fun queryUserApps(): AppsFast {
         val t0 = SystemClock.elapsedRealtime()
         val pm = FlitApp.app.packageManager
@@ -336,11 +344,9 @@ object Files {
         return AppsFast(entries, systems)
     }
 
-    /** Labels and sorts system apps (called when the System apps section is first opened). */
     fun systemEntries(raw: List<ApplicationInfo>): List<AppEntry> =
         entriesOf(FlitApp.app.packageManager, raw, true)
 
-    /** Warms the label cache while the user is still on the Home screen. */
     fun prefetchApps() {
         pool.execute {
             try {
@@ -349,6 +355,9 @@ object Files {
             }
         }
     }
+
+    /** Split-APK parts are never listed on their own: they belong to a main APK. */
+    private fun isSplitName(name: String): Boolean = name.startsWith("split_", true)
 
     /** APK files in accessible storage: MediaStore first, plus Download/ and Download/Flit/. */
     @Suppress("DEPRECATION")
@@ -369,6 +378,7 @@ object Files {
                     if (path.contains("/Android/data/") || path.contains("/.partial/")) continue
                     if (!path.endsWith(".apk", true)) continue
                     val f = File(path)
+                    if (isSplitName(f.name)) continue
                     if (f.isFile && f.length() > 0 && seen.add(path)) out.add(ApkFile(path, f.name, f.length()))
                 }
             }
@@ -377,6 +387,7 @@ object Files {
         for (dir in listOf(File(root, "Download"), File(root, "Download/Flit"))) {
             val kids = dir.listFiles() ?: continue
             for (f in kids) {
+                if (isSplitName(f.name)) continue
                 if (f.isFile && f.name.endsWith(".apk", true) && f.length() > 0 && seen.add(f.path)) {
                     out.add(ApkFile(f.path, f.name, f.length()))
                 }
@@ -387,7 +398,6 @@ object Files {
         return out
     }
 
-    /** (package name, version code) of an APK file, or null if Android cannot parse it (e.g. a lone split APK). */
     fun apkMeta(path: String): Pair<String, Long>? {
         return try {
             val pi = FlitApp.app.packageManager.getPackageArchiveInfo(path, 0) ?: return null
@@ -397,7 +407,6 @@ object Files {
         }
     }
 
-    /** Installed version code of [pkg], or -1 if it is not installed. */
     fun installedVersion(pkg: String): Long {
         return try {
             FlitApp.app.packageManager.getPackageInfo(pkg, 0).longVersionCode
@@ -410,7 +419,6 @@ object Files {
 
     // ---- Directory browsing ----------------------------------------------------------
 
-    /** Android 11+ blocks Android/data and Android/obb even with all-files access. */
     fun isRestricted(f: File): Boolean {
         if (Build.VERSION.SDK_INT < 30) return false
         val p = f.path
@@ -418,7 +426,6 @@ object Files {
         return p == "$r/Android/data" || p == "$r/Android/obb"
     }
 
-    /** Folders first, then files, each sorted by name. Null if the folder cannot be read. */
     fun listDir(dir: File): List<Entry>? {
         val arr = dir.listFiles() ?: return null
         val out = ArrayList<Entry>(arr.size)
@@ -432,10 +439,6 @@ object Files {
         return out
     }
 
-    /**
-     * Every accessible file below [dir] as selectable items. The relative path keeps the folder
-     * name, so a folder send recreates the structure on the Receiver. Call on a background thread.
-     */
     fun expandFolder(dir: File, limit: Int = 200_000): List<Item> {
         val out = ArrayList<Item>()
         val base = dir.parentFile?.path ?: dir.path
@@ -460,7 +463,6 @@ object Files {
 
     // ---- Opening and installing ------------------------------------------------------
 
-    /** Opens a file with another app (Open, Play) or the package installer (APK). */
     fun open(c: Context, path: String) {
         try {
             val f = File(path)
@@ -478,8 +480,31 @@ object Files {
     /** True when Android lets Flit hand APKs to the package installer ("Install unknown apps"). */
     fun canInstall(c: Context): Boolean = c.packageManager.canRequestPackageInstalls()
 
-    /** Starts Android's own Package Installer for [path]. Returns false if it could not be started. */
+    /**
+     * The split-APK parts that belong to the main APK at [path]: sibling "split_*.apk" files in the
+     * same folder (Flit receives a split-APK app into its own folder). Empty for an ordinary APK.
+     */
+    fun splitsOf(path: String): List<File> {
+        val f = File(path)
+        if (isSplitName(f.name)) return emptyList()
+        val dir = f.parentFile ?: return emptyList()
+        if (dir.path == root.path || dir.path == File(root, "Download").path) return emptyList()
+        val kids = dir.listFiles() ?: return emptyList()
+        return kids.filter { it.isFile && isSplitName(it.name) && it.name.endsWith(".apk", true) }
+            .sortedBy { it.name }
+    }
+
+    /**
+     * Starts Android's own installer for [path]. A main APK with split parts next to it is installed
+     * together with them in one PackageInstaller session (Android shows its own confirmation).
+     * Returns false if it could not be started.
+     */
     fun install(c: Context, path: String): Boolean {
+        val splits = splitsOf(path)
+        if (splits.isNotEmpty()) {
+            installBundle(c, File(path), splits)
+            return true
+        }
         return try {
             val uri = FileProvider.getUriForFile(c, c.packageName + ".files", File(path))
             val i = Intent(Intent.ACTION_VIEW)
@@ -490,6 +515,45 @@ object Files {
             true
         } catch (e: Exception) {
             false
+        }
+    }
+
+    private fun installBundle(c: Context, base: File, splits: List<File>) {
+        val app = c.applicationContext
+        pool.execute {
+            var ok = false
+            try {
+                val pi = app.packageManager.packageInstaller
+                val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+                val id = pi.createSession(params)
+                val s = pi.openSession(id)
+                try {
+                    for (f in listOf(base) + splits) {
+                        FileInputStream(f).use { ins ->
+                            s.openWrite(f.name, 0, f.length()).use { out ->
+                                ins.copyTo(out, 128 * 1024)
+                                s.fsync(out)
+                            }
+                        }
+                    }
+                    val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                        (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+                    val pend = PendingIntent.getBroadcast(app, id, Intent(app, InstallResult::class.java), flags)
+                    s.commit(pend.intentSender)
+                    ok = true
+                } catch (e: Exception) {
+                    Log.w(TAG, "install session failed: ${e.javaClass.simpleName}: ${e.message}")
+                    try {
+                        s.abandon()
+                    } catch (x: Exception) {
+                    }
+                } finally {
+                    s.close()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "install session could not start: ${e.javaClass.simpleName}: ${e.message}")
+            }
+            if (!ok) FlitApp.main.post { Ui.toast(app, R.string.apk_install_failed) }
         }
     }
 }
