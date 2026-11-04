@@ -17,6 +17,12 @@ import java.util.concurrent.atomic.AtomicLongArray
 
 private const val TAG = "FlitSend"
 
+/**
+ * Manifest type of a split-APK part. The parts of one app follow their main APK in the manifest;
+ * both sides show the whole group as ONE entry while the files still travel separately.
+ */
+const val TYPE_PART = 100
+
 /** One file of a send run. [label] is the name shown in History; [hist] is false for split-APK parts. */
 class TxFile(
     val fid: Int,
@@ -26,10 +32,14 @@ class TxFile(
     val mtime: Long,
     val type: Int,
     val label: String,
-    val hist: Boolean
+    val hist: Boolean,
+    val part: Boolean = false
 ) {
     val name: String = File(rel).name
 }
+
+/** One displayed entry: files [start, end) of the run (a normal file, or an app with its splits). */
+class TxRow(val start: Int, val end: Int)
 
 /** Chunk hashes served so far for one file (used to verify the Receiver's root hash). */
 private class Tc(val n: Int) {
@@ -96,7 +106,6 @@ class TxSession(val run: TxRun, val target: P2p.Found) {
     val alive: Boolean
         get() = state <= ACTIVE
 
-    /** Allocates the per-file arrays once the run's manifest exists. */
     @Synchronized
     fun prepare() {
         if (prepared) return
@@ -117,7 +126,6 @@ class TxSession(val run: TxRun, val target: P2p.Found) {
         srcs.clear()
     }
 
-    /** Counts [n] served bytes for [fid], never beyond the file size (retries do not inflate progress). */
     fun addSent(fid: Int, n: Int) {
         val cap = run.files[fid].size
         while (true) {
@@ -144,7 +152,6 @@ class TxSession(val run: TxRun, val target: P2p.Found) {
         }
     }
 
-    /** Root hash of the file if every chunk was served in this session, else null. */
     fun rootOf(fid: Int): ByteArray? {
         val tc = chunks[fid] ?: return null
         synchronized(tc) {
@@ -164,6 +171,10 @@ class TxRun(val items: List<Item>) {
 
     @Volatile
     var files: List<TxFile> = emptyList()
+
+    /** Displayed entries: a split-APK app is ONE row covering its main APK and its parts. */
+    @Volatile
+    var rows: List<TxRow> = emptyList()
 
     @Volatile
     var mans: List<Man> = emptyList()
@@ -200,19 +211,27 @@ class TxRun(val items: List<Item>) {
                 list.add(TxFile(list.size, item.path, item.rel, f.length(), f.lastModified(), item.type, item.name, true))
             } else {
                 val folder = item.rel.removeSuffix(".apk")
-                val parts = ArrayList<String>()
-                parts.add(item.path)
-                parts.addAll(item.splits)
-                var first = true
-                for (p in parts) {
+                val base = File(item.path)
+                if (!base.isFile) {
+                    miss++
+                    continue
+                }
+                // Main APK first, then its parts (named split_*), all inside one folder.
+                list.add(
+                    TxFile(list.size, item.path, "$folder/$folder.apk", base.length(), base.lastModified(),
+                        Types.APK, item.name, true)
+                )
+                for (p in item.splits) {
                     val f = File(p)
                     if (!f.isFile) {
                         miss++
                         continue
                     }
-                    val nm = if (first) "base.apk" else f.name
-                    list.add(TxFile(list.size, p, "$folder/$nm", f.length(), f.lastModified(), Types.APK, item.name, first))
-                    first = false
+                    val nm = if (f.name.startsWith("split_")) f.name else "split_" + f.name
+                    list.add(
+                        TxFile(list.size, p, "$folder/$nm", f.length(), f.lastModified(), Types.APK,
+                            item.name, false, true)
+                    )
                 }
             }
         }
@@ -220,17 +239,26 @@ class TxRun(val items: List<Item>) {
         val m = ArrayList<Man>(list.size)
         for (f in list) {
             sum += f.size
-            m.add(Man(f.fid, f.rel, f.size, f.mtime, f.type))
+            m.add(Man(f.fid, f.rel, f.size, f.mtime, if (f.part) TYPE_PART else f.type))
+        }
+        val rl = ArrayList<TxRow>()
+        var i = 0
+        while (i < list.size) {
+            var j = i + 1
+            while (j < list.size && list[j].part) j++
+            rl.add(TxRow(i, j))
+            i = j
         }
         synchronized(this) {
             files = list
+            rows = rl
             mans = m
             total = sum
             missing = miss
             for (s in sessions) s.prepare()
             ready = true
         }
-        Log.d(TAG, "manifest ready: ${list.size} files, $sum bytes, $miss missing")
+        Log.d(TAG, "manifest ready: ${list.size} files in ${rl.size} entries, $sum bytes, $miss missing")
         latch.countDown()
     }
 
@@ -243,7 +271,6 @@ class TxRun(val items: List<Item>) {
         if (ready) s.prepare()
     }
 
-    /** Combined progress over all Receivers that accepted (by bytes). */
     fun progress(): Float {
         var sent = 0L
         var den = 0L
@@ -278,7 +305,6 @@ object SendEngine {
     private val h = FlitApp.main
     private val queue = ArrayList<TxSession>()
 
-    /** Starts a run for the selected items. Returns null if Wi-Fi Direct cannot be used. */
     fun begin(items: List<Item>): TxRun? {
         val c = cur
         if (c != null && !c.finished) return c
@@ -311,7 +337,6 @@ object SendEngine {
         P2p.discover(10_000L, l)
     }
 
-    /** Sends the run to [targets]: invitations go out one by one. */
     fun send(targets: List<P2p.Found>) {
         val r = cur ?: return
         Log.d(TAG, "send: ${targets.size} target(s): " + targets.joinToString { P2p.mask(it.address) })
@@ -325,7 +350,6 @@ object SendEngine {
         Xfer.sync()
     }
 
-    /** Abandons the run (the user left the discovery screen). */
     fun cancel() {
         val r = cur ?: return
         Log.d(TAG, "cancel: run abandoned")
@@ -372,7 +396,6 @@ object SendEngine {
         }
     }
 
-    /** A Receiver's control connection arrived (any thread). */
     fun onPeer(peer: Peer) {
         val r = cur
         val s = r?.byId?.get(peer.id)
@@ -425,7 +448,6 @@ object SendEngine {
                 Proto.RESUME -> s.paused = false
                 Proto.STOP -> end(s, TxSession.STOPPED)
                 Proto.STREAM_WANT -> Thread({
-                    // The Receiver is the Group Owner: we dial the data connection ourselves.
                     val c = peer.dial(0)
                     if (c != null) serve(s, c)
                 }, "flit-dial2").start()
@@ -595,6 +617,7 @@ object SendEngine {
             Log.d(TAG, "finish: '${s.name}' state=${s.state} accepted=${s.accepted} why='${s.why}'")
         }
         val files = r.files
+        val rows = r.rows
         val n = files.size
         val okFid = BooleanArray(n)
         val failFid = BooleanArray(n)
@@ -615,10 +638,25 @@ object SendEngine {
             s.closeSrcs()
             s.peer?.close()
         }
+
+        // Count and record by displayed entry: an app with splits is one entry, complete only
+        // when its main APK and every part were sent.
         var ok = 0
         var failed = r.missing
-        for (i in 0 until n) {
-            if (okFid[i]) ok++ else if (failFid[i]) failed++
+        val rowOk = BooleanArray(rows.size)
+        for ((k, row) in rows.withIndex()) {
+            var all = true
+            var anyFail = false
+            for (i in row.start until row.end) {
+                if (!okFid[i]) all = false
+                if (failFid[i]) anyFail = true
+            }
+            if (all) {
+                ok++
+                rowOk[k] = true
+            } else if (anyFail) {
+                failed++
+            }
         }
 
         Link.sending = false
@@ -633,9 +671,11 @@ object SendEngine {
             val names = r.sessions.filter { it.accepted }.joinToString(", ") { it.name }
             Files.pool.execute {
                 val now = System.currentTimeMillis()
-                for (i in 0 until n) {
-                    val tf = files[i]
-                    if (!okFid[i] || !tf.hist) continue
+                for ((k, row) in rows.withIndex()) {
+                    if (!rowOk[k]) continue
+                    val tf = files[row.start]
+                    var size = 0L
+                    for (i in row.start until row.end) size += files[i].size
                     var pkg = ""
                     var vc = 0L
                     if (tf.type == Types.APK) {
@@ -647,14 +687,14 @@ object SendEngine {
                     }
                     var root = ""
                     for (s in r.sessions) {
-                        val b = if (s.accepted && s.prepared) s.rootOf(i) else null
+                        val b = if (s.accepted && s.prepared) s.rootOf(row.start) else null
                         if (b != null) {
                             root = Chunks.hex(b)
                             break
                         }
                     }
                     try {
-                        Db.addHistory(Hist(0, Db.SENT, tf.label, tf.path, tf.size, tf.type, root, now, pkg, vc, names))
+                        Db.addHistory(Hist(0, Db.SENT, tf.label, tf.path, size, tf.type, root, now, pkg, vc, names))
                     } catch (e: Exception) {
                     }
                 }
