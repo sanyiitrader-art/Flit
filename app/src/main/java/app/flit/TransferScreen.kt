@@ -19,7 +19,10 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlin.math.abs
 
-/** Hands an APK to Android's package installer, asking for "Install unknown apps" first if needed. */
+/**
+ * Hands an APK to Android's package installer, asking for "Install unknown apps" first if needed.
+ * A main APK with split parts beside it is installed together with them ([Files.install]).
+ */
 fun installApk(a: MainActivity, path: String) {
     if (Files.canInstall(a)) {
         if (!Files.install(a, path)) Ui.toast(a, R.string.apk_install_failed)
@@ -125,9 +128,9 @@ class FileCard(c: Context) : LinearLayout(c) {
 /**
  * Transfer screen for the Receiver ([rx]) or the Sender ([tx]). The X button closes the screen
  * but not the transfer (a draggable progress bubble takes over). Updates run 4 times a second
- * while the screen is visible. Receiver: Pause, or Stop + Resume while paused, Retry on failed
- * files, an action on received files. Sender: one control set per Receiver (chips switch between
- * Receivers when there are several).
+ * while the screen is visible. A split-APK app is ONE card (combined size, progress and status).
+ * Receiver: Pause, or Stop + Resume while paused, Retry on failed entries, an action on received
+ * ones. Sender: one control set per Receiver (chips switch between Receivers when there are several).
  */
 class TransferScreen(act: MainActivity, val rx: RxSession?, val tx: TxRun?) : Screen(act) {
 
@@ -343,33 +346,35 @@ class TransferScreen(act: MainActivity, val rx: RxSession?, val tx: TxRun?) : Sc
 
     private fun bindCard(c: FileCard, pos: Int) {
         if (rx != null) {
-            val list = rx.files
-            if (pos >= list.size) return
-            val f = list[pos]
-            bindStatic(c, f, f.name)
+            val rows = rx.rows
+            if (pos >= rows.size) return
+            val row = rows[pos]
+            val f = row.head
+            bindStatic(c, row, f.name)
             c.tick.visibility = GONE
             c.action.visibility = GONE
             c.setFailedLook(false)
+            val size = row.size()
             var frac = 0f
-            when (f.state) {
+            when (row.state()) {
                 RecvFile.ACTIVE -> {
-                    val b = f.bytes()
+                    val b = row.bytes()
                     c.status.text = if (rx.paused) sPaused else sReceiving
                     c.status.setTextColor(Ui.cText)
-                    c.sub.text = act.getString(R.string.progress_of, Types.size(b), Types.size(f.size))
-                    frac = if (f.size > 0L) b.toFloat() / f.size else 0f
+                    c.sub.text = act.getString(R.string.progress_of, Types.size(b), Types.size(size))
+                    frac = if (size > 0L) b.toFloat() / size else 0f
                 }
                 RecvFile.DONE -> {
                     c.status.text = sReceived
                     c.status.setTextColor(Ui.cText2)
-                    c.sub.text = Types.size(f.size)
+                    c.sub.text = Types.size(size)
                     c.action.text = act.getString(openLabel(Types.typeOf(f.name)))
                     c.action.visibility = VISIBLE
                 }
                 RecvFile.FAILED -> {
                     c.status.text = "✕ $sFailed"
                     c.status.setTextColor(Ui.cText)
-                    c.sub.text = Types.size(f.size)
+                    c.sub.text = Types.size(size)
                     c.setFailedLook(true)
                     if (rx.state == RxSession.RUN) {
                         c.action.text = act.getString(R.string.btn_retry)
@@ -379,17 +384,17 @@ class TransferScreen(act: MainActivity, val rx: RxSession?, val tx: TxRun?) : Sc
                 RecvFile.EXISTS -> {
                     c.status.text = sExists
                     c.status.setTextColor(Ui.cText2)
-                    c.sub.text = Types.size(f.size)
+                    c.sub.text = Types.size(size)
                 }
                 RecvFile.STOPPED -> {
                     c.status.text = sStopped
                     c.status.setTextColor(Ui.cText2)
-                    c.sub.text = Types.size(f.size)
+                    c.sub.text = Types.size(size)
                 }
                 else -> {
                     c.status.text = sWait
                     c.status.setTextColor(Ui.cText2)
-                    c.sub.text = Types.size(f.size)
+                    c.sub.text = Types.size(size)
                 }
             }
             c.setFrac(frac)
@@ -397,43 +402,81 @@ class TransferScreen(act: MainActivity, val rx: RxSession?, val tx: TxRun?) : Sc
         }
 
         val s = sel ?: return
-        val files = tx!!.files
-        if (!s.prepared || pos >= files.size) return
-        val f = files[pos]
-        bindStatic(c, f, f.name)
+        val t = tx!!
+        val files = t.files
+        val rows = t.rows
+        if (!s.prepared || pos >= rows.size) return
+        val row = rows[pos]
+        val f = files[row.start]
+        bindStatic(c, row, f.name)
         c.action.visibility = GONE
         c.tick.visibility = GONE
         c.setFailedLook(false)
+
+        var size = 0L
+        var sentB = 0L
+        var anyFail = false
+        var anySend = false
+        var allSent = true
+        var allExists = true
+        for (i in row.start until row.end) {
+            size += files[i].size
+            sentB += s.sent.get(i)
+            when (s.status.get(i)) {
+                TxSession.ST_FAIL -> {
+                    anyFail = true
+                    allSent = false
+                    allExists = false
+                }
+                TxSession.ST_SENT -> allExists = false
+                TxSession.ST_EXISTS -> {}
+                TxSession.ST_SEND -> {
+                    anySend = true
+                    allSent = false
+                    allExists = false
+                }
+                else -> {
+                    allSent = false
+                    allExists = false
+                }
+            }
+        }
+        val combined = when {
+            anyFail -> TxSession.ST_FAIL
+            allSent && allExists -> TxSession.ST_EXISTS
+            allSent -> TxSession.ST_SENT
+            anySend || sentB > 0L -> TxSession.ST_SEND
+            else -> TxSession.ST_WAIT
+        }
         var frac = 0f
-        when (s.status.get(pos)) {
+        when (combined) {
             TxSession.ST_SEND -> {
-                val b = s.sent.get(pos)
                 c.status.text = if (s.paused) sPaused else sSending
                 c.status.setTextColor(Ui.cText)
-                c.sub.text = act.getString(R.string.progress_of, Types.size(b), Types.size(f.size))
-                frac = if (f.size > 0L) b.toFloat() / f.size else 0f
+                c.sub.text = act.getString(R.string.progress_of, Types.size(sentB), Types.size(size))
+                frac = if (size > 0L) sentB.toFloat() / size else 0f
             }
             TxSession.ST_SENT -> {
                 c.status.text = sSent
                 c.status.setTextColor(Ui.cText2)
-                c.sub.text = Types.size(f.size)
+                c.sub.text = Types.size(size)
                 c.tick.visibility = VISIBLE
             }
             TxSession.ST_FAIL -> {
                 c.status.text = "✕ $sFailed"
                 c.status.setTextColor(Ui.cText)
-                c.sub.text = Types.size(f.size)
+                c.sub.text = Types.size(size)
                 c.setFailedLook(true)
             }
             TxSession.ST_EXISTS -> {
                 c.status.text = sExists
                 c.status.setTextColor(Ui.cText2)
-                c.sub.text = Types.size(f.size)
+                c.sub.text = Types.size(size)
             }
             else -> {
                 c.status.text = sWait
                 c.status.setTextColor(Ui.cText2)
-                c.sub.text = Types.size(f.size)
+                c.sub.text = Types.size(size)
             }
         }
         c.setFrac(frac)
@@ -441,13 +484,14 @@ class TransferScreen(act: MainActivity, val rx: RxSession?, val tx: TxRun?) : Sc
 
     private fun onAction(pos: Int) {
         val r = rx ?: return
-        val list = r.files
-        if (pos >= list.size) return
-        val f = list[pos]
-        when (f.state) {
-            RecvFile.FAILED -> r.retry(f)
+        val rows = r.rows
+        if (pos >= rows.size) return
+        val row = rows[pos]
+        when (row.state()) {
+            RecvFile.FAILED -> for (m in row.members) if (m.state == RecvFile.FAILED) r.retry(m)
             RecvFile.DONE -> {
-                if (Types.typeOf(f.name) == Types.APK) installApk(act, f.dest.path) else Files.open(act, f.dest.path)
+                val path = row.head.dest.path
+                if (Types.typeOf(row.head.name) == Types.APK) installApk(act, path) else Files.open(act, path)
             }
         }
     }
@@ -455,10 +499,10 @@ class TransferScreen(act: MainActivity, val rx: RxSession?, val tx: TxRun?) : Sc
     private inner class Ad : RecyclerView.Adapter<VH>() {
 
         override fun getItemCount(): Int {
-            if (rx != null) return rx.files.size
+            if (rx != null) return rx.rows.size
             val s = sel
             val t = tx
-            return if (s != null && t != null && s.prepared) t.files.size else 0
+            return if (s != null && t != null && s.prepared) t.rows.size else 0
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
