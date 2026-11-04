@@ -76,6 +76,11 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
+        <!-- Receives the result of a split-APK install session (Android's own confirmation screen). -->
+        <receiver
+            android:name=".InstallResult"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"
