@@ -1,7 +1,6 @@
 package app.flit
 
 import android.app.Activity
-import android.app.Dialog
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -29,8 +28,8 @@ abstract class Screen(val act: MainActivity) : FrameLayout(act) {
 /**
  * The only Activity. Owns the screen stack, edge-to-edge window setup, permission and result
  * forwarding, the layer that holds the floating bubble, and the transfer hooks of [Xfer]
- * (incoming-request dialog, completed screen). Language and theme are applied in
- * attachBaseContext, so changing either simply recreates this Activity.
+ * (transfer screen on a new incoming transfer, completed screen). Language and theme are applied
+ * in attachBaseContext, so changing either simply recreates this Activity.
  */
 class MainActivity : Activity(), Xfer.Hook {
 
@@ -38,8 +37,6 @@ class MainActivity : Activity(), Xfer.Hook {
     private lateinit var layer: FrameLayout
     private val stack = ArrayList<Screen>()
 
-    private var inDialog: Dialog? = null
-    private var inFor: Pending? = null
     private val rxStart = HashMap<RxSession, Long>()
 
     override fun attachBaseContext(base: Context) {
@@ -74,8 +71,6 @@ class MainActivity : Activity(), Xfer.Hook {
             root.post { handleGo(intent) }
         }
 
-        // After the first frame: start passive change tracking (no work until something changes),
-        // and warm the app-label cache so Sender opens with labels already cached.
         root.post {
             Files.watch()
             Files.prefetchApps()
@@ -123,7 +118,6 @@ class MainActivity : Activity(), Xfer.Hook {
         top.onShow()
     }
 
-    /** Removes a screen wherever it is in the stack (the top one goes through [pop]). */
     private fun removeScreen(s: Screen) {
         val i = stack.indexOf(s)
         if (i < 0) return
@@ -172,45 +166,26 @@ class MainActivity : Activity(), Xfer.Hook {
 
     // ---- Xfer.Hook (main thread) -------------------------------------------------------
 
-    /** Shows the request at the head of the queue (one dialog at a time). */
+    /**
+     * A transfer from a Sender just started (the Android Wi-Fi Direct invitation was the user's
+     * confirmation): show its transfer screen.
+     */
     override fun incoming() {
-        val p = ReceiveEngine.head() ?: return
-        if (isFinishing || isDestroyed) return
-        if (inFor === p && inDialog?.isShowing == true) return
-        inDialog?.dismiss()
-        inFor = p
-        val queued = ReceiveEngine.pending.size - 1
-        inDialog = Dialogs.incoming(
-            this, p.peer.name, p.req.count, p.req.total, queued,
-            {
-                inFor = null
-                inDialog = null
-                val s = ReceiveEngine.accept(p)
-                if (s != null) {
-                    rxStart[s] = SystemClock.elapsedRealtime()
-                    push(TransferScreen(this, s, null))
-                }
-            },
-            {
-                inFor = null
-                inDialog = null
-                ReceiveEngine.decline(p)
-            }
-        )
+        val s = Xfer.focusRx ?: return
+        if (isFinishing || isDestroyed || s.isEnded) return
+        if (stack.any { it is TransferScreen && it.rx === s }) return
+        if (!rxStart.containsKey(s)) rxStart[s] = SystemClock.elapsedRealtime()
+        push(TransferScreen(this, s, null))
     }
 
-    override fun incomingGone() {
-        inDialog?.dismiss()
-        inDialog = null
-        inFor = null
-    }
+    override fun incomingGone() {}
 
     /** The receiving session ended: completed screen if files arrived, otherwise just back. */
     override fun receiveFinished(s: RxSession) {
         report(s)
         for (sc in stack.toList()) if (sc is TransferScreen && sc.rx === s) removeScreen(sc)
         if (isFinishing || isDestroyed) return
-        if (s.files.any { it.state == RecvFile.DONE }) push(CompletedScreen(this, s))
+        if (s.rows.any { it.state() == RecvFile.DONE }) push(CompletedScreen(this, s))
     }
 
     /** The send run ended: its transfer screen closes, leaving the Sender interface. */
@@ -262,7 +237,6 @@ class MainActivity : Activity(), Xfer.Hook {
         super.onResume()
         Perms.onResume(this)
         stack.lastOrNull()?.onShow()
-        if (ReceiveEngine.head() != null) incoming()
     }
 
     override fun onRequestPermissionsResult(
@@ -291,9 +265,6 @@ class MainActivity : Activity(), Xfer.Hook {
     }
 
     override fun onDestroy() {
-        inDialog?.dismiss()
-        inDialog = null
-        inFor = null
         if (Xfer.hook === this) Xfer.hook = null
         Bubbles.detach(layer)
         super.onDestroy()
