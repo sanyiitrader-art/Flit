@@ -81,12 +81,16 @@ class RxRow(val head: RxFile, val parts: List<RxFile>, val dir: File?) {
 
 /**
  * One accepted transfer from one Sender. Logic in short:
- *  - Files are activated one at a time (or up to 4 with the Receiver toggle on).
- *  - A pool of 1..4 data streams pulls chunks from any active file; each stream keeps several GET
- *    requests in flight. A monitor thread adds or removes streams from measured throughput.
+ *  - Files are activated one at a time, or (Simultaneous transfers on) up to Tuning.MAX_FILES at
+ *    once. With the toggle on, all those files are opened up front and the data streams take
+ *    chunks from them in turn, so several files really progress together.
+ *  - A pool of 1..4 data streams pulls chunks; each stream keeps several GET requests in flight.
+ *    A monitor thread adds or removes streams from measured throughput.
  *  - Every chunk is hashed while it is written; a file is renamed into place only when all chunks
  *    are verified. A failed file never stops the others.
  *  - A split-APK app arrives as several files into one folder but is shown and recorded as ONE entry.
+ *  - Watchdogs: no manifest within 30 s, or no byte of progress for 45 s, ends the session as
+ *    interrupted (instead of sitting at 0% forever).
  */
 class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long, val chunk: Int) {
 
@@ -96,6 +100,9 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
         const val DONE = 2
         const val STOPPED = 3
         const val LOST = 4
+
+        private const val MANIFEST_WAIT_MS = 30_000L
+        private const val STALL_MS = 45_000L
     }
 
     private class Job(val f: RxFile, val rf: RecvFile, val idx: Int)
@@ -153,6 +160,12 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
     private var lastTick = 0L
     private var lastCk = 0L
 
+    /** Round-robin position for taking chunks from the active files. */
+    private val rr = AtomicInteger(0)
+
+    private var lastProc = -1L
+    private var stallSince = 0L
+
     // ---- Progress ---------------------------------------------------------------------------
 
     fun processed(): Long {
@@ -178,7 +191,14 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
                 Sess(id, Db.ROLE_RECEIVER, peer.name, Db.SESS_ACTIVE, total, 0L, count, System.currentTimeMillis())
             )
         }
-        if (!peer.send(Proto.ACCEPT, Proto.sid(id))) end(LOST)
+        if (!peer.send(Proto.ACCEPT, Proto.sid(id))) {
+            end(LOST)
+            return
+        }
+        // The Sender must answer with the manifest soon; otherwise do not wait at 0% forever.
+        FlitApp.main.postDelayed({
+            if (state == WAIT && !ended.get()) end(LOST)
+        }, MANIFEST_WAIT_MS)
     }
 
     fun onFrame(f: Frame) {
@@ -316,13 +336,25 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
 
     private fun nextJob(): Job? {
         if (paused || ended.get()) return null
+        // Simultaneous mode: open every allowed file up front so they all get chunks in turn.
+        if (Prefs.simultaneous) while (activateNext()) { /* fill up to the limit */ }
         var j = claim()
         while (j == null && activateNext()) j = claim()
         return j
     }
 
+    /**
+     * Takes the next unclaimed chunk. With Simultaneous transfers on, the search starts at a
+     * rotating file so all active files advance together; otherwise the first active file is
+     * finished first.
+     */
     private fun claim(): Job? {
-        for (f in active) {
+        val snap = active.toList()
+        val n = snap.size
+        if (n == 0) return null
+        val start = if (Prefs.simultaneous && n > 1) Math.floorMod(rr.getAndIncrement(), n) else 0
+        for (k in 0 until n) {
+            val f = snap[(start + k) % n]
             if (f.state != RecvFile.ACTIVE) continue
             val rf = f.rf ?: continue
             val i = rf.next()
@@ -583,6 +615,7 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
             if (now - lastTick >= 900L) {
                 lastTick = now
                 tick()
+                if (ended.get()) break
             }
             if (termCount.get() >= files.size) {
                 end(DONE)
@@ -600,7 +633,16 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
     }
 
     private fun tick() {
-        val remaining = (bytesTotal - processed()).coerceAtLeast(0L)
+        val now = SystemClock.elapsedRealtime()
+        val proc = processed()
+        if (proc != lastProc || paused || termCount.get() >= files.size) {
+            lastProc = proc
+            stallSince = now
+        } else if (now - stallSince > STALL_MS) {
+            end(LOST) // nothing moved for a long time: report it instead of waiting forever
+            return
+        }
+        val remaining = (bytesTotal - proc).coerceAtLeast(0L)
         val d = ctl.tick(net.get(), remaining, paused)
         if (trouble) {
             trouble = false
