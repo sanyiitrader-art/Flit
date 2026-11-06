@@ -26,22 +26,13 @@ import com.google.android.gms.location.Priority
  *
  *  - Storage: API 28-29 legacy runtime permissions; API 30+ all-files access (a Settings screen).
  *  - Wi-Fi Direct: API 28-32 ACCESS_FINE_LOCATION (+ Location services ON); API 33+ NEARBY_WIFI_DEVICES.
- *    BLUETOOTH_* permissions are not involved on any version.
  *  - Notifications: runtime permission on API 33+ only.
  *
- * Location SERVICES (the device toggle) and the Location PERMISSION (granted to Flit) are separate
- * steps. For the services toggle on API 28-32:
- *  1. If Google Play services is usable, Android's native "turn on Location" popup is shown.
- *     When the user accepts, Android can take a moment to report Location as on, so the flow waits
- *     briefly and then trusts the accepted answer instead of cancelling.
- *  2. Otherwise Flit's own dialog opens the full Location Settings screen.
- *
- * Wi-Fi off: Android's own Wi-Fi panel (API 29+) or Wi-Fi settings page (API 28) opens directly.
- * When the user comes back, the flow waits up to ~5 s for the setting to really turn on and then
- * continues by itself (no second tap). Flit never turns Wi-Fi or Location on silently.
- *
- *  - [startup]: runs once per launch at the first-launch steps.
- *  - [gate]: runs before every discovery start and only asks for what is actually missing.
+ * [gate] runs before every discovery start. While it runs, [busy] is true and the Activity greys
+ * out and disables the whole screen (the system prompts are separate windows, so they stay usable).
+ * Every prompt that is still needed is shown once, in order. A prompt the user declines does NOT
+ * stop the others from appearing; when nothing is left to ask, the gate finishes: [ready] runs only
+ * if everything is on, and [busy] turns false either way so the screen is usable again.
  */
 object Perms {
 
@@ -64,11 +55,28 @@ object Perms {
     private var waiting = W_NONE
     private var gateReady: (() -> Unit)? = null
 
+    /** True while the gate is running (the Activity shades and disables the screen). */
+    @Volatile
+    var busy = false
+        private set
+
+    /** Set by the Activity: called on the main thread whenever [busy] changes. */
+    @Volatile
+    var onBusy: ((Boolean) -> Unit)? = null
+
     // Native Location popup bookkeeping.
     private var locBusy = false
     private var locBusyAt = 0L
     private var locWait = false
     private var locTrust = false // the user accepted the popup; Android may not report it yet
+    private var locSkipped = false // the user declined the Location prompt in this gate run
+    private var wifiSkipped = false // the user declined the Wi-Fi prompt in this gate run
+
+    private fun setBusy(on: Boolean) {
+        if (busy == on) return
+        busy = on
+        onBusy?.invoke(on)
+    }
 
     // ---- State queries -------------------------------------------------------------
 
@@ -87,7 +95,6 @@ object Perms {
 
     fun hasWifiPerm(): Boolean = granted(wifiPerm())
 
-    /** True when discovery may start from the permission point of view (feature gating). */
     fun canDiscover(): Boolean = hasWifiPerm()
 
     /** Location services must be on for Wi-Fi Direct discovery on Android 9-12L. */
@@ -106,12 +113,10 @@ object Perms {
     fun hasNotif(): Boolean =
         Build.VERSION.SDK_INT < 33 || granted(Manifest.permission.POST_NOTIFICATIONS)
 
-    /** Location services count as on if Android says so, or the user just accepted the popup. */
     private fun locationOk(): Boolean = locationOn() || locTrust
 
     // ---- Standalone actions -----------------------------------------------------------
 
-    /** Asks for storage access in the way the Android version requires. No-op when granted. */
     fun requestStorage(a: Activity) {
         if (hasStorage()) return
         if (Build.VERSION.SDK_INT >= 30) {
@@ -130,10 +135,9 @@ object Perms {
 
     // ---- Startup flow --------------------------------------------------------------------
 
-    /** First-launch sequence: storage, Location services, Wi-Fi Direct permission, notifications. */
     fun startup(a: Activity) {
         if (mode != MODE_NONE) return
-        resetLocation()
+        resetFlags()
         mode = MODE_STARTUP
         step = 0
         advance(a)
@@ -184,15 +188,20 @@ object Perms {
     /**
      * Runs [ready] once Wi-Fi Direct can be used: permission granted, Location services on
      * (Android 9-12L) and Wi-Fi enabled. Only missing items are requested, each through Android's
-     * own UI; if the user declines any step the gate is cancelled and [ready] is never called.
-     * Every call starts from a clean state, so an earlier interrupted flow cannot block it.
+     * own UI. Every call starts from a clean state.
      */
     fun gate(a: Activity, ready: () -> Unit) {
-        resetLocation()
+        resetFlags()
         mode = MODE_GATE
         gateReady = ready
         waiting = W_NONE
+        setBusy(true)
         gateStep(a)
+    }
+
+    /** Abandons a running gate (back press while the screen is shaded). */
+    fun abort() {
+        if (mode == MODE_GATE) cancel()
     }
 
     private fun gateStep(a: Activity) {
@@ -201,40 +210,48 @@ object Perms {
             a.requestPermissions(arrayOf(wifiPerm()), REQ_WIFI)
             return
         }
-        if (needsLocationServices() && !locationOk()) {
+        if (needsLocationServices() && !locationOk() && !locSkipped) {
             askLocation(a)
             return
         }
-        if (!wifiOn()) {
+        if (!wifiOn() && !wifiSkipped) {
             waiting = W_WIFI
             val i = if (Build.VERSION.SDK_INT >= 29) Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
             else Intent(Settings.ACTION_WIFI_SETTINGS)
-            if (!launch(a, i)) cancel()
+            if (!launch(a, i)) {
+                wifiSkipped = true
+                gateStep(a)
+            }
             return
         }
+        // Nothing left to ask. Continue only if everything is really on.
+        val allOn = (!needsLocationServices() || locationOk()) && wifiOn()
         val r = gateReady
         cancel()
-        r?.invoke()
+        if (allOn) r?.invoke()
     }
 
     private fun cancel() {
         mode = MODE_NONE
         gateReady = null
         waiting = W_NONE
-        resetLocation()
+        resetFlags()
+        setBusy(false)
     }
 
-    private fun resetLocation() {
+    private fun resetFlags() {
         locBusy = false
         locWait = false
         locTrust = false
+        locSkipped = false
+        wifiSkipped = false
     }
 
     // ---- Location services ---------------------------------------------------------------
 
     private fun askLocation(a: Activity) {
         val now = SystemClock.elapsedRealtime()
-        if (locBusy && now - locBusyAt < 15_000L) return // a check or popup is already in flight
+        if (locBusy && now - locBusyAt < 15_000L) return
         if (GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(a) != ConnectionResult.SUCCESS) {
             locationFallback(a)
             return
@@ -287,14 +304,24 @@ object Perms {
             waiting = W_LOCSVC
             launch(a, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
         }, {
-            if (mode == MODE_STARTUP) advance(a) else cancel()
+            when (mode) {
+                MODE_STARTUP -> advance(a)
+                MODE_GATE -> {
+                    locSkipped = true
+                    gateStep(a)
+                }
+                else -> cancel()
+            }
         })
     }
 
     private fun locationDone(a: Activity, ok: Boolean) {
         when (mode) {
             MODE_STARTUP -> advance(a)
-            MODE_GATE -> if (ok) gateStep(a) else cancel()
+            MODE_GATE -> {
+                if (!ok) locSkipped = true // declined: still show the remaining prompts
+                gateStep(a)
+            }
         }
     }
 
@@ -314,7 +341,6 @@ object Perms {
 
     // ---- Activity callbacks --------------------------------------------------------------
 
-    /** Forward from Activity.onActivityResult. Returns true if the result belonged to Perms. */
     fun onActivityResult(a: Activity, req: Int, result: Int): Boolean {
         if (req != REQ_LOC) return false
         locBusy = false
@@ -328,7 +354,6 @@ object Perms {
         return true
     }
 
-    /** Forward from Activity.onRequestPermissionsResult. */
     fun onResult(a: Activity, req: Int, results: IntArray) {
         val ok = results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }
         when (req) {
@@ -364,32 +389,39 @@ object Perms {
         if (w == W_NONE) return
         when (mode) {
             MODE_STARTUP -> advance(a)
-            MODE_GATE -> {
-                val check: () -> Boolean = when (w) {
-                    W_LOCSVC -> { { locationOn() } }
-                    W_WIFI -> { { wifiOn() } }
-                    else -> { { true } }
+            MODE_GATE -> when (w) {
+                W_LOCSVC -> waitFor(a, { locationOn() }, 0, 8) {
+                    locSkipped = true
+                    gateStep(a)
                 }
-                waitFor(a, check, 0)
+                W_WIFI -> waitFor(a, { wifiOn() }, 0, 12) {
+                    wifiSkipped = true
+                    gateStep(a)
+                }
+                else -> gateStep(a)
             }
         }
     }
 
     /**
-     * Android needs a moment to switch Wi-Fi or Location on after the user did it. Poll for up to
-     * ~5 s, then continue the flow by itself; give up (cancel) only if it never turned on.
+     * Android needs a moment to switch Wi-Fi or Location on after the user did it. Checks at once,
+     * then every 250 ms up to [max] times; [onFail] runs if it never turned on (the user declined).
      */
-    private fun waitFor(a: Activity, check: () -> Boolean, tries: Int) {
+    private fun waitFor(a: Activity, check: () -> Boolean, tries: Int, max: Int, onFail: () -> Unit) {
         if (mode != MODE_GATE) return
         if (check()) {
             gateStep(a)
             return
         }
-        if (a.isFinishing || a.isDestroyed || tries >= 20) {
+        if (a.isFinishing || a.isDestroyed) {
             cancel()
             return
         }
-        FlitApp.main.postDelayed({ waitFor(a, check, tries + 1) }, 250L)
+        if (tries >= max) {
+            onFail()
+            return
+        }
+        FlitApp.main.postDelayed({ waitFor(a, check, tries + 1, max, onFail) }, 250L)
     }
 
     // ---- Helpers -------------------------------------------------------------------------
