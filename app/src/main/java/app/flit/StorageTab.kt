@@ -1,6 +1,7 @@
 package app.flit
 
 import android.content.Context
+import android.os.FileObserver
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -13,11 +14,17 @@ import androidx.recyclerview.widget.RecyclerView
 import java.io.File
 
 /**
- * Internal storage browser. Folders first, then files. Tapping a folder opens it; its checkbox
+ * Internal storage browser. Folders first, then files. Tapping a folder opens it; tapping a file's
+ * icon opens the file, tapping the rest of its card or its checkbox selects it; its checkbox
  * selects the folder and every accessible file below it (expanded on a background thread).
  * Android/data and Android/obb are shown as restricted on Android 11+, never faked.
+ *
+ * Live updates: a FileObserver watches ONLY the folder that is open (and stops when the tab is
+ * detached), and MediaStore changes act as a backup signal. Either one marks the listing dirty and
+ * reloads it (debounced) while the tab is on screen. If the open folder is deleted, the browser
+ * moves up to the nearest folder that still exists.
  */
-class StorageTab(c: Context) : LinearLayout(c), Sel.Listener {
+class StorageTab(c: Context) : LinearLayout(c), Sel.Listener, Live {
 
     private var cur: File = Files.root
     private var entries: List<Entry> = emptyList()
@@ -25,6 +32,11 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener {
     private var loadedAt = 0L
     private var gen = 0
     private val busy = HashSet<String>()
+
+    @Volatile
+    private var dirty = false
+    private var obs: FileObserver? = null
+    private val refresh = Runnable { if (dirty && isShown && Perms.hasStorage()) load(false) }
 
     private val up: ImageView
     private val path = Ui.label(c, "", 14f, Ui.cText, true, 1)
@@ -81,8 +93,48 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener {
             ) { context.findActivity()?.let { Perms.requestStorage(it) } }
             return
         }
-        if (!loaded || System.currentTimeMillis() - loadedAt > 10_000L) load(false)
+        Files.watch()
+        if (!loaded || dirty || System.currentTimeMillis() - loadedAt > 10_000L) load(false)
     }
+
+    // ---- Live updates ------------------------------------------------------------------
+
+    /** MediaStore backup signal: files changed somewhere. Folder-level events normally arrive first. */
+    override fun onLive(kind: Int) {
+        if (kind == Files.KIND_APPS) return
+        dirty = true
+        refresh.run()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun watchDir() {
+        obs?.stopWatching()
+        obs = null
+        if (!Perms.hasStorage()) return
+        val o = object : FileObserver(cur.path, MASK) {
+            override fun onEvent(event: Int, name: String?) {
+                dirty = true
+                FlitApp.main.removeCallbacks(refresh)
+                FlitApp.main.postDelayed(refresh, 600L)
+            }
+        }
+        o.startWatching()
+        obs = o
+    }
+
+    private fun stopWatching() {
+        obs?.stopWatching()
+        obs = null
+        FlitApp.main.removeCallbacks(refresh)
+    }
+
+    private fun nearest(f: File): File {
+        var x = f
+        while (!x.exists() && x.path != Files.root.path) x = x.parentFile ?: break
+        return x
+    }
+
+    // ---- Loading -----------------------------------------------------------------------
 
     private fun updateHeader() {
         val atRoot = cur.path == Files.root.path
@@ -94,24 +146,33 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener {
     private fun load(scrollTop: Boolean) {
         val d = cur
         val g = ++gen
+        dirty = false
         updateHeader()
+        if (isAttachedToWindow) watchDir()
         FlitApp.io.execute {
             val list = try {
                 Files.listDir(d)
             } catch (e: Exception) {
                 null
             }
+            val gone = list == null && !d.exists()
             FlitApp.main.post {
                 if (g == gen) {
-                    loaded = true
-                    loadedAt = System.currentTimeMillis()
-                    entries = list ?: emptyList()
-                    adapter.notifyDataSetChanged()
-                    if (scrollTop) rv.scrollToPosition(0)
-                    when {
-                        list == null -> notice.set(context.getString(R.string.folder_restricted))
-                        list.isEmpty() -> notice.set(context.getString(R.string.folder_empty))
-                        else -> notice.hide()
+                    if (gone) {
+                        // The open folder was deleted or moved: continue from the nearest one that exists.
+                        cur = nearest(d)
+                        load(true)
+                    } else {
+                        loaded = true
+                        loadedAt = System.currentTimeMillis()
+                        entries = list ?: emptyList()
+                        adapter.notifyDataSetChanged()
+                        if (scrollTop) rv.scrollToPosition(0)
+                        when {
+                            list == null -> notice.set(context.getString(R.string.folder_restricted))
+                            list.isEmpty() -> notice.set(context.getString(R.string.folder_empty))
+                            else -> notice.hide()
+                        }
                     }
                 }
             }
@@ -125,11 +186,15 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener {
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         Sel.addListener(this)
+        Files.addLive(this)
+        if (loaded) watchDir()
         onChanged()
     }
 
     override fun onDetachedFromWindow() {
         Sel.removeListener(this)
+        Files.removeLive(this)
+        stopWatching()
         super.onDetachedFromWindow()
     }
 
@@ -232,7 +297,12 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener {
                 r.sub.visibility = if (e.restricted) View.VISIBLE else View.GONE
                 r.alpha = if (e.restricted) 0.5f else 1f
                 r.hit.visibility = if (e.restricted) View.INVISIBLE else View.VISIBLE
+                // A folder's icon is not a button: tapping it behaves like tapping the row.
+                r.icon.setOnClickListener(null)
+                r.icon.isClickable = false
             } else {
+                // A file's icon / thumbnail opens it (built-in viewer or Android's "Open with").
+                r.icon.setOnClickListener { Open.file(context, e.path) }
                 r.alpha = 1f
                 r.sub.text = Types.size(e.size)
                 r.sub.visibility = View.VISIBLE
@@ -265,5 +335,10 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener {
 
     private companion object {
         val PAY = Any()
+
+        // Structural changes and finished writes only (no per-write MODIFY events).
+        const val MASK = FileObserver.CREATE or FileObserver.DELETE or FileObserver.MOVED_FROM or
+            FileObserver.MOVED_TO or FileObserver.CLOSE_WRITE or FileObserver.DELETE_SELF or
+            FileObserver.MOVE_SELF
     }
 }
