@@ -286,8 +286,10 @@ class TxRun(val items: List<Item>) {
 
 /**
  * Send side. One [TxRun] at a time. Receivers are connected one after another (a Wi-Fi Direct
- * device can only negotiate one invitation at a time); each connected Receiver gets its own
- * [TxSession] with independent pause / stop. Data is pulled by the Receiver: this side answers
+ * device can only negotiate one invitation at a time): the next Receiver is invited only after the
+ * previous one's control connection is up (plus a short settle time) or its attempt failed, so a
+ * new invitation never disturbs one that is still being accepted. Each connected Receiver gets its
+ * own [TxSession] with independent pause / stop. Data is pulled by the Receiver: this side answers
  * GET requests on any number of data connections, hashing every chunk while it streams it.
  * Diagnostics use the log tag "FlitSend"; every failure records an internal reason.
  */
@@ -304,6 +306,12 @@ object SendEngine {
 
     private val h = FlitApp.main
     private val queue = ArrayList<TxSession>()
+
+    /** Pause between one Receiver's link coming up and the next invitation. */
+    private const val SETTLE_MS = 1500L
+
+    /** Longest a single Receiver may hold up the invitations behind it (user has to accept first). */
+    private const val CONNECT_MAX_MS = 45_000L
 
     fun begin(items: List<Item>): TxRun? {
         val c = cur
@@ -365,7 +373,7 @@ object SendEngine {
             connectNext(r)
             return
         }
-        Log.d(TAG, "connecting to '${s.target.name}' (${P2p.mask(s.target.address)})")
+        Log.d(TAG, "connecting to '${s.target.name}' (${P2p.mask(s.target.address)}), ${queue.size} more queued")
         P2p.connect(s.target.address) { ok ->
             if (!ok) {
                 fail(s, "invitation failed: ${P2p.lastFail}")
@@ -374,12 +382,13 @@ object SendEngine {
                 Log.d(TAG, "invitation sent to '${s.target.name}', waiting for the group and the TCP link")
             }
         }
-        h.postDelayed({ advance(r, s) }, 8000L)
+        // The next Receiver waits for this one (control link up, failure, or this time limit).
         h.postDelayed({
             if (s.state == TxSession.CONNECTING) {
-                fail(s, "no control connection within 45 s (group not formed, or TCP dial failed)")
+                fail(s, "no control connection within ${CONNECT_MAX_MS / 1000} s (not accepted, group not formed, or TCP dial failed)")
             }
-        }, 45_000L)
+            advance(r, s)
+        }, CONNECT_MAX_MS)
     }
 
     private fun advance(r: TxRun, s: TxSession) {
@@ -412,7 +421,8 @@ object SendEngine {
         s.peer = peer
         peer.dataHandler = { c -> serve(s, c) }
         peer.startReader({ f -> onFrame(s, f) }, { onClosed(s) })
-        h.post { advance(r, s) }
+        // Let this link settle before the next invitation is sent.
+        h.postDelayed({ advance(r, s) }, SETTLE_MS)
         if (!r.awaitReady(20_000L) || r.files.isEmpty()) {
             fail(s, "manifest not ready or empty")
             peer.close()
@@ -437,6 +447,7 @@ object SendEngine {
         try {
             when (f.type) {
                 Proto.ACCEPT -> if (s.state == TxSession.REQUESTED) {
+                    Log.d(TAG, "ACCEPT from '${s.name}', sending the manifest")
                     s.state = TxSession.ACTIVE
                     s.accepted = true
                     sendManifest(s, peer)
@@ -537,6 +548,7 @@ object SendEngine {
     private fun serve(s: TxSession, c: Conn) {
         val buf = ByteArray(Tuning.bufSize)
         val md = Chunks.sha()
+        Log.d(TAG, "data connection for '${s.name}' is being served")
         try {
             while (!c.closed && s.state <= TxSession.ACTIVE) {
                 val f = c.read()
