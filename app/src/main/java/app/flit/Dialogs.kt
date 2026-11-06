@@ -8,6 +8,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.TextView
 
 /**
  * Shared dialogs. Custom-drawn from the palette tokens (secondary surface, hairline border),
@@ -177,6 +178,63 @@ object Dialogs {
         )
     }
 
+    // ---- Archive extraction ------------------------------------------------------------------
+
+    /** Buttons on opposite sides: [left] at the bottom-left, [right] at the bottom-right. */
+    private fun splitButtons(a: Activity, col: LinearLayout, left: Pill, right: Pill) {
+        val row = LinearLayout(a)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.addView(left, Ui.lin(Ui.WRAP, Ui.WRAP))
+        row.addView(View(a), Ui.lin(0, 1, 1f))
+        row.addView(right, Ui.lin(Ui.WRAP, Ui.WRAP))
+        col.addView(row, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(20) })
+    }
+
+    /** "Extraction" confirmation: Cancel bottom-left, Extract bottom-right. */
+    fun extractConfirm(a: Activity, onExtract: () -> Unit) {
+        val (d, col) = frame(a, a.getString(R.string.v_extract_title), true)
+        (col.getChildAt(0) as TextView).textSize = 22f
+        message(a, col, a.getString(R.string.v_extract_msg))
+        splitButtons(
+            a, col,
+            pill(a, d, a.getString(R.string.v_cancel), false, null),
+            pill(a, d, a.getString(R.string.v_extract_go), true, onExtract)
+        )
+        present(a, d)
+    }
+
+    /**
+     * Extraction progress dialog near the bottom of the screen. Cancel stops the extraction,
+     * Hide only closes the dialog (the extraction continues; a notification takes over).
+     */
+    fun extractProgress(a: Activity, fileName: String, onCancel: () -> Unit, onHide: () -> Unit): ExtractDialog {
+        val (d, col) = frame(a, a.getString(R.string.v_extracting, fileName), false)
+        val title = col.getChildAt(0) as TextView
+        title.maxLines = 2
+        title.ellipsize = android.text.TextUtils.TruncateAt.END
+        val cur = Ui.label(a, "", 13f, Ui.cText2, false, 1)
+        col.addView(cur, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(12) })
+        val bar = BarView(a)
+        col.addView(bar, Ui.lin(Ui.MATCH, Ui.dp(6)).also { it.topMargin = Ui.dp(12) })
+        val pct = Ui.label(a, "0%", 14f, Ui.cText, true)
+        pct.gravity = Gravity.END
+        col.addView(pct, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(8) })
+        splitButtons(
+            a, col,
+            pill(a, d, a.getString(R.string.v_cancel), false, onCancel),
+            pill(a, d, a.getString(R.string.v_hide), true, onHide)
+        )
+        present(a, d)
+        d.window?.let { w ->
+            w.setGravity(Gravity.BOTTOM)
+            val lp = w.attributes
+            lp.y = Ui.dp(28)
+            w.attributes = lp
+        }
+        return ExtractDialog(d, cur, pct, bar)
+    }
+
     /** Radio indicator: accent ring and dot when selected, grey ring otherwise. */
     private class RadioView(c: android.content.Context, private val on: Boolean) : View(c) {
         private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -195,6 +253,29 @@ object Dialogs {
                 p.color = Ui.cAccent
                 c.drawCircle(cx, cy, r * 0.5f, p)
             }
+        }
+    }
+}
+
+/** Handle to the extraction progress dialog (update from the main thread). */
+class ExtractDialog(
+    private val d: Dialog,
+    private val cur: TextView,
+    private val pct: TextView,
+    private val bar: BarView
+) {
+    fun update(file: String, frac: Float) {
+        cur.text = file
+        pct.text = (frac.coerceIn(0f, 1f) * 100f).toInt().toString() + "%"
+        bar.progress = frac
+    }
+
+    val showing: Boolean get() = d.isShowing
+
+    fun dismiss() {
+        try {
+            d.dismiss()
+        } catch (e: Exception) {
         }
     }
 }
