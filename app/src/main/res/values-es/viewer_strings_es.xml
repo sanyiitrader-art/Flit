@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cadenas de los visores, reproductores y extracción de archivos (prefijo v_). -->
+<resources>
+    <string name="v_open_with">Abrir con</string>
+    <string name="v_open_no_app">Ninguna aplicación de este teléfono puede abrir este archivo.</string>
+    <string name="v_open_failed">No se pudo abrir este archivo.</string>
+    <string name="v_open_missing">Este archivo ya no existe.</string>
+
+    <string name="v_extract_title">Extracción</string>
+    <string name="v_extract_msg">¿Quieres extraer este archivo?</string>
+    <string name="v_extract_go">Extraer</string>
+    <string name="v_cancel">Cancelar</string>
+    <string name="v_hide">Ocultar</string>
+    <string name="v_extracting">Extrayendo %1$s</string>
+    <string name="v_extract_done">Extraído en %1$s</string>
+    <string name="v_extract_failed">Error al extraer. Es posible que el archivo esté dañado.</string>
+    <string name="v_extract_nospace">No hay espacio suficiente para extraer.</string>
+    <string name="v_extract_cancelled">Extracción cancelada.</string>
+    <string name="v_extract_unsupported">Flit no puede extraer este archivo. Elige otra aplicación.</string>
+
+    <string name="v_crop_revert">Revertir</string>
+    <string name="v_crop_save">Guardar</string>
+    <string name="v_crop_copy">Guardar como copia</string>
+    <string name="v_crop_cancel">Cancelar</string>
+    <string name="v_crop_failed">No se pudo guardar la imagen.</string>
+    <string name="v_crop_saved">Guardado.</string>
+    <string name="v_crop_copy_saved">Guardado como copia.</string>
+
+    <string name="v_back">Atrás</string>
+    <string name="v_crop">Recortar</string>
+    <string name="v_playlist">Lista de reproducción</string>
+    <string name="v_pip">Minimizar</string>
+    <string name="v_lock">Bloquear</string>
+    <string name="v_unlock">Desbloquear</string>
+    <string name="v_sound">Sonido</string>
+    <string name="v_prev">Anterior</string>
+    <string name="v_next">Siguiente</string>
+    <string name="v_play_pause">Reproducir o pausar</string>
+    <string name="v_rewind">Retroceder 10 segundos</string>
+    <string name="v_forward">Avanzar 10 segundos</string>
+    <string name="v_aspect">Relación de aspecto</string>
+    <string name="v_speed">Velocidad</string>
+    <string name="v_shuffle">Aleatorio</string>
+    <string name="v_mode">Modo de reproducción</string>
+    <string name="v_close">Cerrar</string>
+    <string name="v_restore">Abrir reproductor</string>
+
+    <string name="v_aspect_original">Original</string>
+    <string name="v_aspect_full">Pantalla completa</string>
+    <string name="v_aspect_best">Mejor ajuste</string>
+
+    <string name="v_pip_unavailable">La imagen en imagen no está disponible en este teléfono.</string>
+</resources>
