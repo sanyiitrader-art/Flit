@@ -175,6 +175,10 @@ android {
         resources {
             excludes += listOf(
                 "/META-INF/{AL2.0,LGPL2.1}",
+                "/META-INF/DEPENDENCIES",
+                "/META-INF/LICENSE*",
+                "/META-INF/NOTICE*",
+                "/META-INF/*.version",
                 "DebugProbesKt.bin",
                 "kotlin-tooling-metadata.json"
             )
@@ -213,4 +217,18 @@ dependencies {
     // Native "Turn on Location" popup (SettingsClient / ResolvableApiException).
     // Used only on Android 9-12L and only when Google Play services is available.
     implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    // Built-in video and audio player (pure Java/Kotlin, no native code, Apache 2.0).
+    implementation("androidx.media3:media3-exoplayer:1.8.0")
+
+    // Markdown shown as formatted text inside a normal selectable TextView (Apache 2.0).
+    implementation("io.noties.markwon:core:4.6.2")
+
+    // SVG images (pure Java, Apache 2.0).
+    implementation("com.caverock:androidsvg-aar:1.4")
+
+    // Archive extraction: 7z (pure Java) and RAR (pure Java). ZIP uses java.util.zip.
+    implementation("org.apache.commons:commons-compress:1.27.1")
+    implementation("org.tukaani:xz:1.10")
+    implementation("com.github.junrar:junrar:7.5.5")
 }
