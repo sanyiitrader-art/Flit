@@ -463,19 +463,8 @@ object Files {
 
     // ---- Opening and installing ------------------------------------------------------
 
-    fun open(c: Context, path: String) {
-        try {
-            val f = File(path)
-            val uri = FileProvider.getUriForFile(c, c.packageName + ".files", f)
-            val i = Intent(Intent.ACTION_VIEW)
-            i.setDataAndType(uri, Types.mime(f.name))
-            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            if (c !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            c.startActivity(i)
-        } catch (e: Exception) {
-            Ui.toast(c, R.string.err_generic)
-        }
-    }
+    /** Opens a file: built-in viewer when Flit has one, otherwise Android's "Open with" (see [Open]). */
+    fun open(c: Context, path: String) = Open.file(c, path)
 
     /** True when Android lets Flit hand APKs to the package installer ("Install unknown apps"). */
     fun canInstall(c: Context): Boolean = c.packageManager.canRequestPackageInstalls()
