@@ -558,6 +558,13 @@ object P2p {
             next()
             return
         }
+        // A group is already running (an earlier Receiver is connected or being set up): do not
+        // cancel or remove anything, that could drop the Receiver that is already joined.
+        if (groupUp || Link.hasPeers()) {
+            Log.d(TAG, "connect: a group is up, inviting without touching it")
+            next()
+            return
+        }
         var fired = false
         lateinit var guard: Runnable
         val go: () -> Unit = {
