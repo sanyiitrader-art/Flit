@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Strings for the built-in viewers, players and archive extraction (all prefixed v_). -->
+<resources>
+    <!-- Open / Open with -->
+    <string name="v_open_with">Open with</string>
+    <string name="v_open_no_app">No app on this phone can open this file.</string>
+    <string name="v_open_failed">Could not open this file.</string>
+    <string name="v_open_missing">This file no longer exists.</string>
+
+    <!-- Archive extraction -->
+    <string name="v_extract_title">Extraction</string>
+    <string name="v_extract_msg">Do you want to extract this file?</string>
+    <string name="v_extract_go">Extract</string>
+    <string name="v_cancel">Cancel</string>
+    <string name="v_hide">Hide</string>
+    <string name="v_extracting">Extracting %1$s</string>
+    <string name="v_extract_done">Extracted to %1$s</string>
+    <string name="v_extract_failed">Extraction failed. The file may be damaged.</string>
+    <string name="v_extract_nospace">Not enough storage space to extract.</string>
+    <string name="v_extract_cancelled">Extraction cancelled.</string>
+    <string name="v_extract_unsupported">Flit cannot extract this archive. Choose another app.</string>
+
+    <!-- Image viewer and crop -->
+    <string name="v_crop_revert">Revert</string>
+    <string name="v_crop_save">Save</string>
+    <string name="v_crop_copy">Save as copy</string>
+    <string name="v_crop_cancel">Cancel</string>
+    <string name="v_crop_failed">Could not save the image.</string>
+    <string name="v_crop_saved">Saved.</string>
+    <string name="v_crop_copy_saved">Saved as a copy.</string>
+
+    <!-- Player and viewer content descriptions -->
+    <string name="v_back">Back</string>
+    <string name="v_crop">Crop</string>
+    <string name="v_playlist">Playlist</string>
+    <string name="v_pip">Minimize</string>
+    <string name="v_lock">Lock</string>
+    <string name="v_unlock">Unlock</string>
+    <string name="v_sound">Sound</string>
+    <string name="v_prev">Previous</string>
+    <string name="v_next">Next</string>
+    <string name="v_play_pause">Play or pause</string>
+    <string name="v_rewind">Back 10 seconds</string>
+    <string name="v_forward">Forward 10 seconds</string>
+    <string name="v_aspect">Aspect ratio</string>
+    <string name="v_speed">Speed</string>
+    <string name="v_shuffle">Shuffle</string>
+    <string name="v_mode">Playback mode</string>
+    <string name="v_close">Close</string>
+    <string name="v_restore">Open player</string>
+
+    <!-- Video aspect ratios -->
+    <string name="v_aspect_original">Original</string>
+    <string name="v_aspect_full">Fullscreen</string>
+    <string name="v_aspect_best">Best Fit</string>
+    <string name="v_aspect_189" translatable="false">18:9</string>
+    <string name="v_aspect_169" translatable="false">16:9</string>
+    <string name="v_aspect_43" translatable="false">4:3</string>
+
+    <string name="v_pip_unavailable">Picture-in-picture is not available on this phone.</string>
+</resources>
