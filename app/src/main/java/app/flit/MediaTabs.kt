@@ -65,7 +65,7 @@ class Notice(c: Context) : LinearLayout(c) {
 /**
  * Card row shared by Videos, Audios and History: thumbnail on the left (optional duration chip at
  * its bottom-right), title and detail text, then an optional checkbox, badge and action button.
- * Tapping the thumbnail is consumed and does nothing.
+ * Tapping the thumbnail is consumed unless the owner sets a listener on [thumbBox].
  */
 class RowView(c: Context, phKind: Int) : LinearLayout(c) {
 
@@ -137,7 +137,7 @@ class RowView(c: Context, phKind: Int) : LinearLayout(c) {
     }
 }
 
-/** Square image cell with the selection checkbox at the top-right. Tapping the image does nothing. */
+/** Square image cell with the selection checkbox at the top-right. Tapping the image opens it. */
 class ImageCell(c: Context) : FrameLayout(c) {
 
     val img = ImageView(c)
@@ -312,9 +312,19 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
             val v: View = if (kind == Types.IMAGE) ImageCell(context)
             else RowView(context, if (kind == Types.VIDEO) Icons.FILM else Icons.NOTE)
             val h = VH(v)
-            if (v is ImageCell) v.hit.setOnClickListener { toggle(h) }
-            else v.setOnClickListener { toggle(h) }
+            if (v is ImageCell) {
+                v.hit.setOnClickListener { toggle(h) } // checkbox corner selects
+                v.img.setOnClickListener { open(h) } // the picture opens the viewer
+            } else {
+                v.setOnClickListener { toggle(h) } // rest of the card selects
+                (v as RowView).thumbBox.setOnClickListener { open(h) } // thumbnail opens the player
+            }
             return h
+        }
+
+        private fun open(h: VH) {
+            val p = h.bindingAdapterPosition
+            if (p != RecyclerView.NO_POSITION && p < data.size) Open.file(context, data[p].path)
         }
 
         private fun toggle(h: VH) {
