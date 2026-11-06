@@ -12,6 +12,7 @@ import androidx.recyclerview.widget.RecyclerView
  * Receiver's completed-transfer screen: X at the top-left, the total received size in the centre,
  * and every entry of this transaction with its icon, name, size and action (Open / Play / Extract /
  * Install). Only entries that arrived complete are listed; a split-APK app is ONE entry.
+ * Closing it returns to the Receiver (discoverable) screen if that was closed for the transfer.
  */
 class CompletedScreen(act: MainActivity, s: RxSession) : Screen(act) {
 
@@ -47,6 +48,11 @@ class CompletedScreen(act: MainActivity, s: RxSession) : Screen(act) {
         rv.setPadding(0, Ui.dp(4), 0, Ui.dp(24))
         col.addView(rv, Ui.lin(Ui.MATCH, 0, 1f))
         addView(col, FrameLayout.LayoutParams(Ui.MATCH, Ui.MATCH))
+    }
+
+    /** Closed (X or back): show the Receiver screen again if it was hidden by the transfer. */
+    override fun onDestroyed() {
+        act.receiverBack()
     }
 
     private inner class Ad : RecyclerView.Adapter<VH>() {
