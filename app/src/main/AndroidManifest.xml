@@ -13,7 +13,7 @@
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
-    <!-- Apps tab: list installed applications on Android 11+. -->
+    <!-- Apps tab: list installed applications on Android 11+. Also lets Flit check that an app exists for "Open with". -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
@@ -40,6 +40,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Audio keeps playing in the background; archive extraction keeps running when hidden. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <uses-feature
@@ -57,12 +60,16 @@
         android:theme="@style/Theme.Flit"
         tools:ignore="DataExtractionRules">
 
+        <!-- Portrait by default; the video player unlocks rotation while it is open.
+             supportsPictureInPicture: native system PiP for the video player (no overlay permission). -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden"
             android:exported="true"
             android:launchMode="singleTask"
+            android:resizeableActivity="true"
             android:screenOrientation="portrait"
+            android:supportsPictureInPicture="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -70,11 +77,17 @@
             </intent-filter>
         </activity>
 
-        <!-- Keeps Receiver mode and running transfers alive in the background (added in Phase 2). -->
+        <!-- Keeps Receiver mode and running transfers alive in the background. -->
         <service
             android:name=".TransferService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- Background audio playback and archive extraction (one small service for both). -->
+        <service
+            android:name=".BgService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback|dataSync" />
 
         <!-- Receives the result of a split-APK install session (Android's own confirmation screen). -->
         <receiver
