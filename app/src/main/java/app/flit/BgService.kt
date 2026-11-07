@@ -13,12 +13,28 @@ import android.os.IBinder
 import androidx.core.content.ContextCompat
 
 /**
- * One small foreground service for the two things that must keep running in the background:
- * audio playback (type mediaPlayback) and archive extraction (type dataSync). Each has its own
+ * One small foreground service for the things that must keep running in the background:
+ * audio playback and the audio of a video the user chose to keep playing (type mediaPlayback), and
+ * archive extraction (type dataSync). Each has its own
  * notification (audio: Play/Pause and Close; extraction: progress, percentage and Cancel). Tapping
  * the audio notification returns to Flit; tapping the extraction one returns and reopens the
  * progress dialog. The service stops itself as soon as neither is active.
  */
+/** State of the video player's "keep the audio playing in the background" mode (see VideoScreen). */
+object VBg {
+    @Volatile
+    var active = false
+
+    @Volatile
+    var name = ""
+
+    @Volatile
+    var playing = false
+
+    var onToggle: (() -> Unit)? = null
+    var onClose: (() -> Unit)? = null
+}
+
 class BgService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -31,8 +47,8 @@ class BgService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACT_TOGGLE -> Audio.toggle()
-            ACT_CLOSE -> Audio.stop()
+            ACT_TOGGLE -> if (Audio.active) Audio.toggle() else VBg.onToggle?.invoke()
+            ACT_CLOSE -> if (Audio.active) Audio.stop() else VBg.onClose?.invoke()
             ACT_CANCEL -> Extractor.cancel()
         }
         refresh()
@@ -47,7 +63,7 @@ class BgService : Service() {
 
     /** Posts the right notifications, or stops the service when nothing needs it. */
     fun refresh() {
-        val aud = Audio.active
+        val aud = Audio.active || VBg.active
         val ext = Extractor.running
         val nm = getSystemService(NotificationManager::class.java)
         if (!aud && !ext) {
@@ -104,9 +120,10 @@ class BgService : Service() {
     }
 
     private fun audioNotification(): Notification {
-        val playing = Audio.wantsPlay
+        val playing = if (Audio.active) Audio.wantsPlay else VBg.playing
+        val name = if (Audio.active) Audio.current?.name else VBg.name
         return base()
-            .setContentTitle(Audio.current?.name ?: getString(R.string.app_name))
+            .setContentTitle(name ?: getString(R.string.app_name))
             .setContentText(getString(R.string.app_name))
             .setContentIntent(open(0, false))
             .setCategory(Notification.CATEGORY_TRANSPORT)
@@ -167,7 +184,7 @@ class BgService : Service() {
                 s.refresh()
                 return
             }
-            if (!(Audio.active || Extractor.running) || starting) return
+            if (!(Audio.active || VBg.active || Extractor.running) || starting) return
             starting = true
             val c: Context = FlitApp.app
             try {
