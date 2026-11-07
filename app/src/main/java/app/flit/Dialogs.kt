@@ -1,469 +1,296 @@
 package app.flit
 
-import android.Manifest
 import android.app.Activity
-import android.content.ActivityNotFoundException
-import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.location.LocationManager
-import android.net.Uri
-import android.net.wifi.WifiManager
-import android.os.Build
-import android.os.Environment
-import android.os.SystemClock
-import android.provider.Settings
-import com.google.android.gms.common.ConnectionResult
-import com.google.android.gms.common.GoogleApiAvailability
-import com.google.android.gms.common.api.ResolvableApiException
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.LocationSettingsRequest
-import com.google.android.gms.location.Priority
+import android.app.Dialog
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.graphics.Color
+import android.widget.LinearLayout
+import android.widget.TextView
 
 /**
- * Version-aware permission and system-state logic.
- *
- *  - Storage: API 28-29 legacy runtime permissions; API 30+ all-files access (a Settings screen).
- *  - Wi-Fi Direct: API 28-32 ACCESS_FINE_LOCATION (+ Location services ON); API 33+ NEARBY_WIFI_DEVICES.
- *  - Notifications: runtime permission on API 33+ only.
- *
- * [gate] runs before every discovery start. While it runs, [busy] is true and the Activity greys
- * out and disables the whole screen (the system prompts are separate windows, so they stay usable).
- * Every prompt that is still needed is shown once, in order. A prompt the user declines does NOT
- * stop the others from appearing; when nothing is left to ask, the gate finishes: [ready] runs only
- * if everything is on, and [busy] turns false either way so the screen is usable again.
+ * Shared dialogs. Custom-drawn from the palette tokens (secondary surface, hairline border),
+ * no system dialog styling. Every dialog dismisses itself before running its callback.
  */
-object Perms {
+object Dialogs {
 
-    const val REQ_STORAGE = 71
-    const val REQ_WIFI = 72
-    const val REQ_NOTIF = 73
-    const val REQ_LOC = 74
-
-    private const val MODE_NONE = 0
-    private const val MODE_STARTUP = 1
-    private const val MODE_GATE = 2
-
-    private const val W_NONE = 0
-    private const val W_LOCSVC = 1
-    private const val W_WIFI = 2
-    private const val W_STORAGE = 3
-
-    private var mode = MODE_NONE
-    private var step = 0
-    private var waiting = W_NONE
-    private var gateReady: (() -> Unit)? = null
-
-    /** True while the gate is running (the Activity shades and disables the screen). */
-    @Volatile
-    var busy = false
-        private set
-
-    /** Set by the Activity: called on the main thread whenever [busy] changes. */
-    @Volatile
-    var onBusy: ((Boolean) -> Unit)? = null
-
-    // Native Location popup bookkeeping.
-    private var locBusy = false
-    private var locBusyAt = 0L
-    private var locWait = false
-    private var locTrust = false // the user accepted the popup; Android may not report it yet
-    private var locSkipped = false // the user declined the Location prompt in this gate run
-    private var wifiSkipped = false // the user declined the Wi-Fi prompt in this gate run
-
-    private fun setBusy(on: Boolean) {
-        if (busy == on) return
-        busy = on
-        onBusy?.invoke(on)
+    private fun frame(a: Activity, title: String, cancelable: Boolean): Pair<Dialog, LinearLayout> {
+        val d = Dialog(a, R.style.Theme_Flit_Dialog)
+        d.setCancelable(cancelable)
+        d.setCanceledOnTouchOutside(false)
+        val col = LinearLayout(a)
+        col.orientation = LinearLayout.VERTICAL
+        col.background = Ui.shape(Ui.cSurface2, 20, Ui.cBorder, 1)
+        col.setPadding(Ui.dp(24), Ui.dp(22), Ui.dp(24), Ui.dp(18))
+        col.addView(Ui.label(a, title, 18f, Ui.cText, true), Ui.lin(Ui.MATCH, Ui.WRAP))
+        d.setContentView(col)
+        return Pair(d, col)
     }
 
-    // ---- State queries -------------------------------------------------------------
-
-    private fun granted(p: String): Boolean =
-        FlitApp.app.checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
-
-    fun hasStorage(): Boolean =
-        if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
-        else granted(Manifest.permission.READ_EXTERNAL_STORAGE) &&
-            granted(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-
-    /** The runtime permission Wi-Fi Direct needs on this Android version. */
-    fun wifiPerm(): String =
-        if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES
-        else Manifest.permission.ACCESS_FINE_LOCATION
-
-    fun hasWifiPerm(): Boolean = granted(wifiPerm())
-
-    fun canDiscover(): Boolean = hasWifiPerm()
-
-    /** Location services must be on for Wi-Fi Direct discovery on Android 9-12L. */
-    fun needsLocationServices(): Boolean = Build.VERSION.SDK_INT <= 32
-
-    fun locationOn(): Boolean {
-        val lm = FlitApp.app.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false
-        return lm.isLocationEnabled
+    private fun present(a: Activity, d: Dialog) {
+        if (a.isFinishing || a.isDestroyed) return
+        d.show()
+        val w = minOf(a.resources.displayMetrics.widthPixels - Ui.dp(48), Ui.dp(400))
+        d.window?.setLayout(w, ViewGroup.LayoutParams.WRAP_CONTENT)
     }
 
-    fun wifiOn(): Boolean {
-        val wm = FlitApp.app.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return false
-        return wm.isWifiEnabled
+    private fun message(a: Activity, col: LinearLayout, text: CharSequence, topDp: Int = 12) {
+        val t = Ui.label(a, text, 14.5f, Ui.cText2)
+        t.setLineSpacing(0f, 1.15f)
+        col.addView(t, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(topDp) })
     }
 
-    fun hasNotif(): Boolean =
-        Build.VERSION.SDK_INT < 33 || granted(Manifest.permission.POST_NOTIFICATIONS)
+    private fun buttons(a: Activity, col: LinearLayout, vararg pills: Pill) {
+        val row = LinearLayout(a)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.END
+        for ((i, p) in pills.withIndex()) {
+            row.addView(p, Ui.lin(Ui.WRAP, Ui.WRAP).also { if (i > 0) it.leftMargin = Ui.dp(8) })
+        }
+        col.addView(row, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(20) })
+    }
 
-    private fun locationOk(): Boolean = locationOn() || locTrust
+    private fun pill(a: Activity, d: Dialog, label: String, filled: Boolean, cb: (() -> Unit)?): Pill {
+        val p = Pill(a, label, filled)
+        p.setOnClickListener {
+            d.dismiss()
+            cb?.invoke()
+        }
+        return p
+    }
 
-    // ---- Standalone actions -----------------------------------------------------------
-
-    fun requestStorage(a: Activity) {
-        if (hasStorage()) return
-        if (Build.VERSION.SDK_INT >= 30) {
-            askAllFiles(a, null)
+    /** General message dialog. [negative] is optional. Not cancelable by back/outside tap. */
+    fun show(
+        a: Activity,
+        title: String,
+        message: CharSequence?,
+        positive: String,
+        onPositive: (() -> Unit)?,
+        negative: String? = null,
+        onNegative: (() -> Unit)? = null,
+        cancelable: Boolean = false
+    ) {
+        val (d, col) = frame(a, title, cancelable)
+        if (!message.isNullOrEmpty()) message(a, col, message)
+        if (negative != null) {
+            buttons(a, col, pill(a, d, negative, false, onNegative), pill(a, d, positive, true, onPositive))
         } else {
-            a.requestPermissions(
-                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE),
-                REQ_STORAGE
+            buttons(a, col, pill(a, d, positive, true, onPositive))
+        }
+        present(a, d)
+    }
+
+    /** Dialog with a caller-supplied body view (used by the hidden tuning panel). */
+    fun custom(
+        a: Activity,
+        title: String,
+        body: View,
+        positive: String,
+        onPositive: (() -> Unit)?,
+        negative: String? = null,
+        onNegative: (() -> Unit)? = null
+    ) {
+        val (d, col) = frame(a, title, true)
+        d.setCanceledOnTouchOutside(true)
+        col.addView(body, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(12) })
+        if (negative != null) {
+            buttons(a, col, pill(a, d, negative, false, onNegative), pill(a, d, positive, true, onPositive))
+        } else {
+            buttons(a, col, pill(a, d, positive, true, onPositive))
+        }
+        present(a, d)
+    }
+
+    /** LOCATION SERVICES explanation (Android 9-12L). */
+    fun location(a: Activity, onEnable: () -> Unit, onNotNow: () -> Unit) {
+        show(
+            a, a.getString(R.string.perm_location_title), a.getString(R.string.perm_location_msg),
+            a.getString(R.string.btn_enable_location), onEnable,
+            a.getString(R.string.btn_not_now), onNotNow
+        )
+    }
+
+    /** Single-choice list (Theme, Language). Picking an option dismisses and reports its index. */
+    fun choose(a: Activity, title: String, options: List<String>, selected: Int, onPick: (Int) -> Unit) {
+        val (d, col) = frame(a, title, true)
+        d.setCanceledOnTouchOutside(true)
+        for ((i, o) in options.withIndex()) {
+            val row = LinearLayout(a)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.background = Ui.ripple(null, 12)
+            row.setPadding(Ui.dp(4), 0, Ui.dp(4), 0)
+            row.addView(Ui.label(a, o, 16f, Ui.cText, i == selected), Ui.lin(0, Ui.WRAP, 1f))
+            row.addView(RadioView(a, i == selected), Ui.lin(Ui.dp(22), Ui.dp(22)))
+            row.setOnClickListener {
+                d.dismiss()
+                onPick(i)
+            }
+            col.addView(row, Ui.lin(Ui.MATCH, Ui.dp(52)).also { if (i == 0) it.topMargin = Ui.dp(8) })
+        }
+        present(a, d)
+    }
+
+    /**
+     * INCOMING TRANSFER request. [queued] is the number of further requests waiting.
+     * Returns the Dialog so the caller can dismiss it if the request is cancelled or expires.
+     */
+    fun incoming(
+        a: Activity,
+        sender: String,
+        files: Int,
+        bytes: Long,
+        queued: Int,
+        onAccept: () -> Unit,
+        onDecline: () -> Unit
+    ): Dialog {
+        val (d, col) = frame(a, a.getString(R.string.incoming_title), false)
+        message(a, col, a.getString(R.string.incoming_message, sender))
+        val count = a.resources.getQuantityString(R.plurals.files_count, files, files)
+        col.addView(
+            Ui.label(a, a.getString(R.string.incoming_summary, count, Types.size(bytes)), 16f, Ui.cText, true),
+            Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(10) }
+        )
+        if (queued > 0) {
+            col.addView(
+                Ui.label(a, a.resources.getQuantityString(R.plurals.incoming_queue, queued, queued), 12.5f, Ui.cText2),
+                Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(8) }
             )
         }
+        buttons(
+            a, col,
+            pill(a, d, a.getString(R.string.btn_decline), false, onDecline),
+            pill(a, d, a.getString(R.string.btn_accept), true, onAccept)
+        )
+        present(a, d)
+        return d
     }
 
-    fun openAppSettings(a: Activity) {
-        launch(a, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + a.packageName)))
+    /** Confirmation before anything is deleted. */
+    fun confirmDelete(a: Activity, count: Int, bytes: Long, onConfirm: () -> Unit) {
+        show(
+            a, a.getString(R.string.delete_confirm_title),
+            a.resources.getQuantityString(R.plurals.delete_confirm_msg, count, count, Types.size(bytes)),
+            a.getString(R.string.dialog_delete), onConfirm,
+            a.getString(R.string.dialog_cancel), null, true
+        )
     }
 
-    // ---- Startup flow --------------------------------------------------------------------
+    // ---- Archive extraction ------------------------------------------------------------------
 
-    fun startup(a: Activity) {
-        if (mode != MODE_NONE) return
-        resetFlags()
-        mode = MODE_STARTUP
-        step = 0
-        advance(a)
+    /** Buttons on opposite sides: [left] at the bottom-left, [right] at the bottom-right. */
+    private fun splitButtons(a: Activity, col: LinearLayout, left: Pill, right: Pill) {
+        val row = LinearLayout(a)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.addView(left, Ui.lin(Ui.WRAP, Ui.WRAP))
+        row.addView(View(a), Ui.lin(0, 1, 1f))
+        row.addView(right, Ui.lin(Ui.WRAP, Ui.WRAP))
+        col.addView(row, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(20) })
     }
 
-    private fun once(k: String): Boolean {
-        if (Prefs.flag("asked_$k")) return false
-        Prefs.setFlag("asked_$k", true)
-        return true
+    /** "Extraction" confirmation: Cancel bottom-left, Extract bottom-right. */
+    fun extractConfirm(a: Activity, onExtract: () -> Unit) {
+        val (d, col) = frame(a, a.getString(R.string.v_extract_title), true)
+        (col.getChildAt(0) as TextView).textSize = 22f
+        message(a, col, a.getString(R.string.v_extract_msg))
+        splitButtons(
+            a, col,
+            pill(a, d, a.getString(R.string.v_cancel), false, null),
+            pill(a, d, a.getString(R.string.v_extract_go), true, onExtract)
+        )
+        present(a, d)
     }
-
-    private fun advance(a: Activity) {
-        while (mode == MODE_STARTUP) {
-            when (step++) {
-                0 -> if (!hasStorage() && once("storage")) {
-                    if (Build.VERSION.SDK_INT >= 30) {
-                        askAllFiles(a) { advance(a) }
-                    } else {
-                        a.requestPermissions(
-                            arrayOf(
-                                Manifest.permission.READ_EXTERNAL_STORAGE,
-                                Manifest.permission.WRITE_EXTERNAL_STORAGE
-                            ),
-                            REQ_STORAGE
-                        )
-                    }
-                    return
-                }
-                1 -> if (needsLocationServices() && !locationOk() && once("locsvc")) {
-                    askLocation(a)
-                    return
-                }
-                2 -> if (!hasWifiPerm() && once("wifi")) {
-                    a.requestPermissions(arrayOf(wifiPerm()), REQ_WIFI)
-                    return
-                }
-                3 -> if (Build.VERSION.SDK_INT >= 33 && !hasNotif() && once("notif")) {
-                    a.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIF)
-                    return
-                }
-                else -> mode = MODE_NONE
-            }
-        }
-    }
-
-    // ---- Discovery gate ------------------------------------------------------------------
 
     /**
-     * Runs [ready] once Wi-Fi Direct can be used: permission granted, Location services on
-     * (Android 9-12L) and Wi-Fi enabled. Only missing items are requested, each through Android's
-     * own UI. Every call starts from a clean state.
+     * Extraction progress dialog near the bottom of the screen. Cancel stops the extraction,
+     * Hide only closes the dialog (the extraction continues; a notification takes over).
      */
-    fun gate(a: Activity, ready: () -> Unit) {
-        resetFlags()
-        mode = MODE_GATE
-        gateReady = ready
-        waiting = W_NONE
-        setBusy(true)
-        gateStep(a)
+    fun extractProgress(a: Activity, fileName: String, onCancel: () -> Unit, onHide: () -> Unit): ExtractDialog {
+        val (d, col) = frame(a, a.getString(R.string.v_extracting, fileName), false)
+        val title = col.getChildAt(0) as TextView
+        title.maxLines = 2
+        title.ellipsize = android.text.TextUtils.TruncateAt.END
+        val cur = Ui.label(a, "", 13f, Ui.cText2, false, 1)
+        col.addView(cur, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(12) })
+        val bar = BarView(a)
+        col.addView(bar, Ui.lin(Ui.MATCH, Ui.dp(6)).also { it.topMargin = Ui.dp(12) })
+        val pct = Ui.label(a, "0%", 14f, Ui.cText, true)
+        pct.gravity = Gravity.END
+        col.addView(pct, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(8) })
+        splitButtons(
+            a, col,
+            pill(a, d, a.getString(R.string.v_cancel), false, onCancel),
+            pill(a, d, a.getString(R.string.v_hide), true, onHide)
+        )
+        present(a, d)
+        d.window?.let { w ->
+            w.setGravity(Gravity.BOTTOM)
+            val lp = w.attributes
+            lp.y = Ui.dp(28)
+            w.attributes = lp
+        }
+        return ExtractDialog(d, cur, pct, bar)
     }
 
-    /** Abandons a running gate (back press while the screen is shaded). */
-    fun abort() {
-        if (mode == MODE_GATE) cancel()
+    /** Red used for the Delete button and the Delete confirmation. */
+    const val RED = 0xFFC0392B.toInt()
+
+    /** "Delete selected files?" Cancel at the bottom-left, Delete (red) at the bottom-right. */
+    fun confirmDelete(a: Activity, count: Int, size: String, onDelete: () -> Unit) {
+        val (d, col) = frame(a, a.getString(R.string.delete_confirm_title), true)
+        message(a, col, a.resources.getQuantityString(R.plurals.delete_confirm_msg, count, count, size))
+        val del = pill(a, d, a.getString(R.string.btn_delete), true, onDelete)
+        del.setTextColor(Color.WHITE)
+        del.background = Ui.ripple(Ui.shape(RED, 100), 100)
+        splitButtons(a, col, pill(a, d, a.getString(R.string.v_cancel), false, null), del)
+        present(a, d)
     }
 
-    private fun gateStep(a: Activity) {
-        if (mode != MODE_GATE) return
-        if (!hasWifiPerm()) {
-            a.requestPermissions(arrayOf(wifiPerm()), REQ_WIFI)
-            return
-        }
-        if (needsLocationServices() && !locationOk() && !locSkipped) {
-            askLocation(a)
-            return
-        }
-        if (!wifiOn() && !wifiSkipped) {
-            waiting = W_WIFI
-            // Android 11+: the Wi-Fi-only panel (just the Wi-Fi switch). Android 10 has only the
-            // combined internet panel; Android 9 opens the Wi-Fi settings page.
-            val i = when {
-                Build.VERSION.SDK_INT >= 30 -> Intent(Settings.Panel.ACTION_WIFI)
-                Build.VERSION.SDK_INT == 29 -> Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
-                else -> Intent(Settings.ACTION_WIFI_SETTINGS)
+    /** Radio indicator: accent ring and dot when selected, grey ring otherwise. */
+    private class RadioView(c: android.content.Context, private val on: Boolean) : View(c) {
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        override fun onDraw(c: Canvas) {
+            val cx = width / 2f
+            val cy = height / 2f
+            val sw = Ui.dpf(2)
+            val r = minOf(width, height) / 2f - sw
+            p.style = Paint.Style.STROKE
+            p.strokeWidth = sw
+            p.color = if (on) Ui.cAccent else Ui.cText2
+            c.drawCircle(cx, cy, r, p)
+            if (on) {
+                p.style = Paint.Style.FILL
+                p.color = Ui.cAccent
+                c.drawCircle(cx, cy, r * 0.5f, p)
             }
-            if (!launch(a, i)) {
-                wifiSkipped = true
-                gateStep(a)
-            }
-            return
         }
-        // Nothing left to ask. Continue only if everything is really on.
-        val allOn = (!needsLocationServices() || locationOk()) && wifiOn()
-        val r = gateReady
-        cancel()
-        if (allOn) r?.invoke()
+    }
+}
+
+/** Handle to the extraction progress dialog (update from the main thread). */
+class ExtractDialog(
+    private val d: Dialog,
+    private val cur: TextView,
+    private val pct: TextView,
+    private val bar: BarView
+) {
+    fun update(file: String, frac: Float) {
+        cur.text = file
+        pct.text = (frac.coerceIn(0f, 1f) * 100f).toInt().toString() + "%"
+        bar.progress = frac
     }
 
-    private fun cancel() {
-        mode = MODE_NONE
-        gateReady = null
-        waiting = W_NONE
-        resetFlags()
-        setBusy(false)
-    }
+    val showing: Boolean get() = d.isShowing
 
-    private fun resetFlags() {
-        locBusy = false
-        locWait = false
-        locTrust = false
-        locSkipped = false
-        wifiSkipped = false
-    }
-
-    // ---- Location services ---------------------------------------------------------------
-
-    private fun askLocation(a: Activity) {
-        val now = SystemClock.elapsedRealtime()
-        if (locBusy && now - locBusyAt < 15_000L) return
-        if (GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(a) != ConnectionResult.SUCCESS) {
-            locationFallback(a)
-            return
-        }
-        locBusy = true
-        locBusyAt = now
+    fun dismiss() {
         try {
-            val req = LocationSettingsRequest.Builder()
-                .addLocationRequest(
-                    LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 10_000L).build()
-                )
-                .setAlwaysShow(true)
-                .build()
-            LocationServices.getSettingsClient(a).checkLocationSettings(req).addOnCompleteListener { t ->
-                if (a.isFinishing || a.isDestroyed) {
-                    locBusy = false
-                    cancel()
-                    return@addOnCompleteListener
-                }
-                if (t.isSuccessful) {
-                    locBusy = false
-                    locTrust = true
-                    locationDone(a, true)
-                    return@addOnCompleteListener
-                }
-                val e = t.exception
-                if (e is ResolvableApiException) {
-                    try {
-                        locWait = true
-                        e.startResolutionForResult(a, REQ_LOC)
-                    } catch (x: Exception) {
-                        locWait = false
-                        locBusy = false
-                        locationFallback(a)
-                    }
-                } else {
-                    locBusy = false
-                    locationFallback(a)
-                }
-            }
+            d.dismiss()
         } catch (e: Exception) {
-            locBusy = false
-            locationFallback(a)
-        }
-    }
-
-    /** Flit's own LOCATION SERVICES dialog, used only when the native popup is unavailable. */
-    private fun locationFallback(a: Activity) {
-        Dialogs.location(a, {
-            waiting = W_LOCSVC
-            launch(a, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-        }, {
-            when (mode) {
-                MODE_STARTUP -> advance(a)
-                MODE_GATE -> {
-                    locSkipped = true
-                    gateStep(a)
-                }
-                else -> cancel()
-            }
-        })
-    }
-
-    private fun locationDone(a: Activity, ok: Boolean) {
-        when (mode) {
-            MODE_STARTUP -> advance(a)
-            MODE_GATE -> {
-                if (!ok) locSkipped = true // declined: still show the remaining prompts
-                gateStep(a)
-            }
-        }
-    }
-
-    private fun acceptedLocation(a: Activity, tries: Int) {
-        if (mode == MODE_NONE) return
-        if (a.isFinishing || a.isDestroyed) {
-            cancel()
-            return
-        }
-        if (locationOn() || tries >= 10) {
-            locTrust = true
-            locationDone(a, true)
-        } else {
-            FlitApp.main.postDelayed({ acceptedLocation(a, tries + 1) }, 200L)
-        }
-    }
-
-    // ---- Activity callbacks --------------------------------------------------------------
-
-    fun onActivityResult(a: Activity, req: Int, result: Int): Boolean {
-        if (req != REQ_LOC) return false
-        locBusy = false
-        if (!locWait) return true
-        locWait = false
-        if (result == Activity.RESULT_OK) {
-            acceptedLocation(a, 0)
-        } else {
-            locationDone(a, locationOn())
-        }
-        return true
-    }
-
-    fun onResult(a: Activity, req: Int, results: IntArray) {
-        val ok = results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }
-        when (req) {
-            REQ_WIFI -> {
-                if (mode == MODE_GATE) {
-                    if (ok) {
-                        gateStep(a)
-                    } else {
-                        cancel()
-                        if (!a.shouldShowRequestPermissionRationale(wifiPerm())) deniedForever(a)
-                    }
-                } else if (mode == MODE_STARTUP) {
-                    advance(a)
-                }
-            }
-            REQ_STORAGE -> {
-                if (mode == MODE_STARTUP) {
-                    advance(a)
-                } else if (!ok &&
-                    !a.shouldShowRequestPermissionRationale(Manifest.permission.READ_EXTERNAL_STORAGE)
-                ) {
-                    deniedForever(a)
-                }
-            }
-            REQ_NOTIF -> if (mode == MODE_STARTUP) advance(a)
-        }
-    }
-
-    /** Forward from Activity.onResume: continues a flow after the user came back from Settings. */
-    fun onResume(a: Activity) {
-        val w = waiting
-        waiting = W_NONE
-        if (w == W_NONE) return
-        when (mode) {
-            MODE_STARTUP -> advance(a)
-            MODE_GATE -> when (w) {
-                W_LOCSVC -> waitFor(a, { locationOn() }, 0, 8) {
-                    locSkipped = true
-                    gateStep(a)
-                }
-                W_WIFI -> waitFor(a, { wifiOn() }, 0, 12) {
-                    wifiSkipped = true
-                    gateStep(a)
-                }
-                else -> gateStep(a)
-            }
-        }
-    }
-
-    /**
-     * Android needs a moment to switch Wi-Fi or Location on after the user did it. Checks at once,
-     * then every 250 ms up to [max] times; [onFail] runs if it never turned on (the user declined).
-     */
-    private fun waitFor(a: Activity, check: () -> Boolean, tries: Int, max: Int, onFail: () -> Unit) {
-        if (mode != MODE_GATE) return
-        if (check()) {
-            gateStep(a)
-            return
-        }
-        if (a.isFinishing || a.isDestroyed) {
-            cancel()
-            return
-        }
-        if (tries >= max) {
-            onFail()
-            return
-        }
-        FlitApp.main.postDelayed({ waitFor(a, check, tries + 1, max, onFail) }, 250L)
-    }
-
-    // ---- Helpers -------------------------------------------------------------------------
-
-    private fun askAllFiles(a: Activity, onNotNow: (() -> Unit)?) {
-        Dialogs.show(
-            a, a.getString(R.string.perm_storage_title), a.getString(R.string.perm_storage_msg_all),
-            a.getString(R.string.btn_grant), {
-                if (mode == MODE_STARTUP) waiting = W_STORAGE
-                var i = Intent(
-                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                    Uri.parse("package:" + a.packageName)
-                )
-                if (i.resolveActivity(a.packageManager) == null) {
-                    i = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                }
-                launch(a, i)
-            },
-            a.getString(R.string.btn_not_now), { onNotNow?.invoke() }
-        )
-    }
-
-    private fun deniedForever(a: Activity) {
-        Dialogs.show(
-            a, a.getString(R.string.perm_required_title), a.getString(R.string.perm_required_msg),
-            a.getString(R.string.btn_open_settings), { openAppSettings(a) },
-            a.getString(R.string.btn_not_now), null
-        )
-    }
-
-    private fun launch(a: Activity, i: Intent): Boolean {
-        return try {
-            a.startActivity(i)
-            true
-        } catch (e: ActivityNotFoundException) {
-            waiting = W_NONE
-            false
         }
     }
 }
