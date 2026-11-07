@@ -323,6 +323,30 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener, Live {
         showPage(pager.currentItem)
     }
 
+    /**
+     * Share With: selects the shared files (never twice, never deselecting), opens the tab that fits
+     * the first file (Images, Videos, Audios, otherwise Internal storage in its folder) and scrolls to it.
+     */
+    fun showShared(files: List<File>) {
+        if (files.isEmpty()) return
+        val items = files.map { Item(Sel.fileKey(it.path), it.name, it.length(), it.path, Types.typeOf(it.name)) }
+        for (it in items) if (!Sel.has(it.key)) Sel.toggle(it)
+        val first = items[0]
+        val tab = when (first.type) {
+            Types.IMAGE -> 2
+            Types.VIDEO -> 3
+            Types.AUDIO -> 4
+            else -> 5
+        }
+        pager.setCurrentItem(tab, false)
+        when (tab) {
+            2 -> images.reveal(first.path)
+            3 -> videos.reveal(first.path)
+            4 -> audios.reveal(first.path)
+            else -> storage.reveal(first.path)
+        }
+    }
+
     override fun onBack(): Boolean = pager.currentItem == 5 && storage.up()
 
     override fun onAttachedToWindow() {
