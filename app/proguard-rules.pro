@@ -20,8 +20,6 @@
 -dontwarn org.osgi.**
 -dontwarn aQute.**
 
-# Markdown renderer: keep it whole so R8 cannot strip or merge the classes that apply the formatting.
--keep class io.noties.markwon.** { *; }
--keep class org.commonmark.** { *; }
--dontwarn io.noties.markwon.**
+# Markdown parser extensions reference optional classes.
 -dontwarn org.commonmark.**
+-dontwarn org.nibor.autolink.**
