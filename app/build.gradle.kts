@@ -1,4 +1,3 @@
-build.gradle.kts
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
