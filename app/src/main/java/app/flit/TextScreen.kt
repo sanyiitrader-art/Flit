@@ -8,6 +8,11 @@ import android.view.ScaleGestureDetector
 import android.widget.ScrollView
 import android.widget.TextView
 import io.noties.markwon.Markwon
+import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
+import io.noties.markwon.ext.tables.TablePlugin
+import io.noties.markwon.ext.tasklist.TaskListPlugin
+import io.noties.markwon.html.HtmlPlugin
+import io.noties.markwon.linkify.LinkifyPlugin
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
@@ -16,7 +21,8 @@ import java.nio.charset.CodingErrorAction
 /**
  * Read-only viewer for plain text and Markdown. Text is a normal selectable TextView, so Android's
  * own long-press / double-tap selection with handles and Copy works. Markdown is rendered as
- * formatted text (headings, lists, bold, links, code blocks; no tables) by Markwon. Pinch changes the
+ * formatted text (headings, emphasis, strikethrough, lists, task lists, tables, quotes, code, links, inline
+ * HTML; images are not loaded) by Markwon. Pinch changes the
  * text size (the text re-wraps to the screen), a tap shows or hides the top bar.
  */
 class TextScreen(act: MainActivity, private val path: String, private val md: Boolean) : Screen(act) {
@@ -59,7 +65,15 @@ class TextScreen(act: MainActivity, private val path: String, private val md: Bo
                     return@execute
                 }
                 if (md) {
-                    val mw = Markwon.create(act)
+                    // Everything Markdown has: headings, emphasis, strikethrough, lists, task lists,
+                    // tables, block quotes, code, rules, links (also bare URLs) and inline HTML.
+                    val mw = Markwon.builder(act)
+                        .usePlugin(StrikethroughPlugin.create())
+                        .usePlugin(TablePlugin.create(act))
+                        .usePlugin(TaskListPlugin.create(act))
+                        .usePlugin(HtmlPlugin.create())
+                        .usePlugin(LinkifyPlugin.create())
+                        .build()
                     val spanned = mw.render(mw.parse(text))
                     FlitApp.main.post {
                         if (!alive) return@post
