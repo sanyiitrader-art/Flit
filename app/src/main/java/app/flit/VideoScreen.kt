@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
+import android.net.Uri
 import android.provider.Settings
 import android.util.Rational
 import android.view.Gravity
@@ -28,15 +29,42 @@ import androidx.media3.exoplayer.ExoPlayer
 import java.io.File
 import java.util.Locale
 
+/** Videos the user opened, most recent first (kept in the app's preferences). */
+private object Recents {
+    private const val KEY = "vid_recent"
+    private const val MAX = 400
+
+    fun list(): List<String> = Prefs.str(KEY).split('\n').filter { it.isNotEmpty() }
+
+    fun touch(path: String) {
+        val out = ArrayList<String>()
+        out.add(path)
+        for (p in list()) if (p != path && out.size < MAX) out.add(p)
+        Prefs.putStr(KEY, out.joinToString("\n"))
+    }
+}
+
 /**
  * Built-in video player (Media3 ExoPlayer; only containers and codecs Android decodes, anything
  * else is offered to other apps). Portrait and landscape; icon-only white controls; native
- * picture-in-picture; playlist of the other videos in the same folder; gestures from [GestureLayer].
- * Brightness and volume gestures change the window brightness and the media volume.
+ * picture-in-picture; gestures from [GestureLayer].
+ *
+ *  - Volume and brightness sliders appear only while you drag on that side, one at a time. The
+ *    brightness thumb is the sun, which turns and grows as brightness goes up.
+ *  - Left edge: lock and rotate. Right edge: sound (mute) and "audio only in background": when on
+ *    (terracotta), leaving the app keeps the sound playing, and coming back continues the video at
+ *    the point the sound reached.
+ *  - Playlist: every video on the phone, most recently opened first. Videos Flit cannot play are
+ *    listed too and open in Android's "Open with".
  */
-class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLayer.Host {
+class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act), GestureLayer.Host {
 
-    private val files: List<File> = Open.siblings(startPath)
+    /** The playable queue. Starts with the opened video and is completed when the library list arrives. */
+    private var files: List<File> = listOf(File(startPath))
+
+    /** Every video on the phone (for the playlist panel). */
+    private var all: List<File> = emptyList()
+
     private val player: ExoPlayer = ExoPlayer.Builder(act).build()
     private val box = VideoBox(act)
     private val gestures = GestureLayer(act)
@@ -47,19 +75,24 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
     private val elapsed = Ui.label(act, "00:00", 12f, Color.WHITE, false, 1)
     private val total = Ui.label(act, "00:00", 12f, Color.WHITE, false, 1)
     private val seek = PSlider(act)
-    private val playBtn: ImageView
-    private val prevBtn: ImageView
-    private val nextBtn: ImageView
-    private val rewBtn: ImageView
-    private val fwdBtn: ImageView
+    private val ctlRow = FrameLayout(act)
+    private val utilRow = LinearLayout(act)
+
+    private val pipBtn: ImageView
     private val speedBtn: TextView
+    private val rewBtn: ImageView
+    private val prevBtn: ImageView
+    private val playBtn: ImageView
+    private val nextBtn: ImageView
+    private val fwdBtn: ImageView
+    private val aspectBtn: ImageView
     private val lockBtn: ImageView
+    private val rotateBtn: ImageView
     private val muteBtn: ImageView
+    private val audioBtn: ImageView
     private val volSlider = PSlider(act, true)
     private val briSlider = PSlider(act, true)
     private val sun = PIcons.get(PIcons.BRIGHT)
-    private val volGroup = LinearLayout(act)
-    private val briGroup = LinearLayout(act)
     private val label = TextView(act)
 
     private val am = act.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -69,13 +102,17 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
     private var hud = true
     private var locked = false
     private var lockShown = false
-    private var adjusting = false
+    private var adjVol = false
+    private var adjBri = false
     private var inPip = false
     private var muted = false
+    private var audioMode = false
+    private var inBg = false
     private var scrubbing = false
     private var alive = true
     private var speed = 1f
     private var aspect = 0
+    private var landMode: Boolean? = null
     private var playlist: PlaylistPanel? = null
     private var speedMenu: View? = null
 
@@ -89,7 +126,8 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
     }
     private val hideLabel = Runnable { label.visibility = View.GONE }
     private val endAdjust = Runnable {
-        adjusting = false
+        adjVol = false
+        adjBri = false
         applyHud()
     }
     private val ticker = object : Runnable {
@@ -103,6 +141,7 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
         setBackgroundColor(Color.BLACK)
         keepScreenOn = true
         Audio.pause() // never two things playing at once
+        Recents.touch(startPath)
 
         addView(box, LayoutParams(Ui.MATCH, Ui.MATCH))
         gestures.host = this
@@ -118,9 +157,8 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
         top.addView(btn(PIcons.get(PIcons.LIST), 48, act.getString(R.string.v_playlist)) { openPlaylist() }, Ui.lin(Ui.dp(48), Ui.dp(48)))
         addView(top, LayoutParams(Ui.MATCH, Ui.WRAP, Gravity.TOP))
 
-        // ---- Bottom: seek bar with times, then the controls ----
+        // ---- Bottom: seek bar with times, then the control rows (arranged by layoutControls) ----
         bottom.orientation = LinearLayout.VERTICAL
-        bottom.setPadding(Ui.dp(24), Ui.dp(16), Ui.dp(24), Ui.dp(8))
         bottom.background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Ui.alpha(Color.BLACK, 170), 0))
 
         val row1 = LinearLayout(act)
@@ -131,78 +169,52 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
         row1.addView(total, Ui.lin(Ui.WRAP, Ui.WRAP))
         bottom.addView(row1, Ui.lin(Ui.MATCH, Ui.WRAP))
 
-        val pipBtn = btn(PIcons.get(PIcons.PIP), 44, act.getString(R.string.v_pip)) { enterPip() }
-        speedBtn = Ui.label(act, speedText(1f), 14f, Color.WHITE, true, 1)
+        pipBtn = btn(PIcons.get(PIcons.PIP), 48, act.getString(R.string.v_pip)) { enterPip() }
+        speedBtn = Ui.label(act, speedText(1f), 15f, Color.WHITE, true, 1)
         speedBtn.gravity = Gravity.CENTER
-        speedBtn.setPadding(Ui.dp(10), 0, Ui.dp(10), 0)
+        speedBtn.setPadding(Ui.dp(12), 0, Ui.dp(12), 0)
         speedBtn.contentDescription = act.getString(R.string.v_speed)
         speedBtn.setOnClickListener {
             bump()
             toggleSpeedMenu()
         }
-        rewBtn = btn(PIcons.get(PIcons.REW10), 44, act.getString(R.string.v_rewind)) { onSeek(-10) }
-        prevBtn = btn(PIcons.get(PIcons.PREV), 44, act.getString(R.string.v_prev)) { player.seekToPrevious() }
-        playBtn = btn(Icons.glyph(Icons.PAUSE, Color.WHITE), 56, act.getString(R.string.v_play_pause)) { onPlayPause() }
-        nextBtn = btn(PIcons.get(PIcons.NEXT), 44, act.getString(R.string.v_next)) { player.seekToNextMediaItem() }
-        fwdBtn = btn(PIcons.get(PIcons.FWD10), 44, act.getString(R.string.v_forward)) { onSeek(10) }
-        val aspectBtn = btn(PIcons.get(PIcons.ASPECT), 44, act.getString(R.string.v_aspect)) { cycleAspect() }
+        rewBtn = btn(PIcons.get(PIcons.REW10), 56, act.getString(R.string.v_rewind)) { onSeek(-10) }
+        prevBtn = btn(PIcons.get(PIcons.PREV), 56, act.getString(R.string.v_prev)) { player.seekToPrevious() }
+        playBtn = btn(Icons.glyph(Icons.PAUSE, Color.WHITE), 72, act.getString(R.string.v_play_pause)) { onPlayPause() }
+        nextBtn = btn(PIcons.get(PIcons.NEXT), 56, act.getString(R.string.v_next)) { player.seekToNextMediaItem() }
+        fwdBtn = btn(PIcons.get(PIcons.FWD10), 56, act.getString(R.string.v_forward)) { onSeek(10) }
+        aspectBtn = btn(PIcons.get(PIcons.ASPECT), 48, act.getString(R.string.v_aspect)) { cycleAspect() }
 
-        val left = LinearLayout(act)
-        left.gravity = Gravity.CENTER_VERTICAL or Gravity.START
-        left.addView(pipBtn, Ui.lin(Ui.dp(44), Ui.dp(44)))
-        left.addView(speedBtn, Ui.lin(Ui.WRAP, Ui.dp(44)))
-        val center = LinearLayout(act)
-        center.gravity = Gravity.CENTER
-        center.addView(rewBtn, Ui.lin(Ui.dp(44), Ui.dp(44)))
-        center.addView(prevBtn, Ui.lin(Ui.dp(44), Ui.dp(44)))
-        center.addView(playBtn, Ui.lin(Ui.dp(56), Ui.dp(56)).also { it.setMargins(Ui.dp(6), 0, Ui.dp(6), 0) })
-        center.addView(nextBtn, Ui.lin(Ui.dp(44), Ui.dp(44)))
-        center.addView(fwdBtn, Ui.lin(Ui.dp(44), Ui.dp(44)))
-        val right = LinearLayout(act)
-        right.gravity = Gravity.CENTER_VERTICAL or Gravity.END
-        right.addView(aspectBtn, Ui.lin(Ui.dp(44), Ui.dp(44)))
-
-        val row2 = LinearLayout(act)
-        row2.orientation = LinearLayout.HORIZONTAL
-        row2.gravity = Gravity.CENTER_VERTICAL
-        row2.addView(left, Ui.lin(0, Ui.WRAP, 1f))
-        row2.addView(center, Ui.lin(Ui.WRAP, Ui.WRAP))
-        row2.addView(right, Ui.lin(0, Ui.WRAP, 1f))
-        bottom.addView(row2, Ui.lin(Ui.MATCH, Ui.WRAP))
+        bottom.addView(ctlRow, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(8) })
+        utilRow.orientation = LinearLayout.HORIZONTAL
+        utilRow.gravity = Gravity.CENTER_VERTICAL
+        bottom.addView(utilRow, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(6) })
         addView(bottom, LayoutParams(Ui.MATCH, Ui.WRAP, Gravity.BOTTOM))
 
-        // ---- Left column: volume slider, lock. Right column: brightness slider, sound. ----
-        volGroup.orientation = LinearLayout.VERTICAL
-        volGroup.gravity = Gravity.CENTER_HORIZONTAL
-        volGroup.addView(
-            ImageView(act).also { it.setImageDrawable(PIcons.get(PIcons.VOL)) },
-            Ui.lin(Ui.dp(26), Ui.dp(26))
-        )
-        volGroup.addView(volSlider, Ui.lin(Ui.dp(40), Ui.dp(130)))
-        briGroup.orientation = LinearLayout.VERTICAL
-        briGroup.gravity = Gravity.CENTER_HORIZONTAL
-        briGroup.addView(
-            ImageView(act).also { it.setImageDrawable(sun) },
-            Ui.lin(Ui.dp(30), Ui.dp(30))
-        )
-        briGroup.addView(briSlider, Ui.lin(Ui.dp(40), Ui.dp(126)))
-
+        // ---- Edge buttons: left lock + rotate, right sound + audio-in-background ----
         lockBtn = btn(PIcons.get(PIcons.UNLOCK), 48, act.getString(R.string.v_lock)) { toggleLock() }
+        rotateBtn = btn(PIcons.get(PIcons.ROTATE), 48, act.getString(R.string.v_rotate)) { act.forceOrientation(width <= height) }
         muteBtn = btn(PIcons.get(PIcons.VOL), 48, act.getString(R.string.v_sound)) { toggleMute() }
+        audioBtn = btn(PIcons.get(PIcons.HEADSET, Color.WHITE), 48, act.getString(R.string.v_audio_bg)) { toggleAudioMode() }
 
         val lc = LinearLayout(act)
         lc.orientation = LinearLayout.VERTICAL
-        lc.gravity = Gravity.CENTER_HORIZONTAL
-        lc.addView(volGroup, Ui.lin(Ui.WRAP, Ui.WRAP))
-        lc.addView(lockBtn, Ui.lin(Ui.dp(48), Ui.dp(48)).also { it.topMargin = Ui.dp(8) })
+        lc.addView(lockBtn, Ui.lin(Ui.dp(48), Ui.dp(48)))
+        lc.addView(rotateBtn, Ui.lin(Ui.dp(48), Ui.dp(48)).also { it.topMargin = Ui.dp(10) })
         addView(lc, LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.START or Gravity.CENTER_VERTICAL).also { it.leftMargin = Ui.dp(10) })
 
         val rc = LinearLayout(act)
         rc.orientation = LinearLayout.VERTICAL
-        rc.gravity = Gravity.CENTER_HORIZONTAL
-        rc.addView(briGroup, Ui.lin(Ui.WRAP, Ui.WRAP))
-        rc.addView(muteBtn, Ui.lin(Ui.dp(48), Ui.dp(48)).also { it.topMargin = Ui.dp(8) })
+        rc.addView(muteBtn, Ui.lin(Ui.dp(48), Ui.dp(48)))
+        rc.addView(audioBtn, Ui.lin(Ui.dp(48), Ui.dp(48)).also { it.topMargin = Ui.dp(10) })
         addView(rc, LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.END or Gravity.CENTER_VERTICAL).also { it.rightMargin = Ui.dp(10) })
+
+        // ---- Sliders: shown only while dragging, one at a time, no icons ----
+        briSlider.thumbIcon = sun
+        volSlider.visibility = INVISIBLE
+        briSlider.visibility = INVISIBLE
+        addView(volSlider, LayoutParams(Ui.dp(40), Ui.dp(190), Gravity.START or Gravity.CENTER_VERTICAL).also { it.leftMargin = Ui.dp(76) })
+        addView(briSlider, LayoutParams(Ui.dp(56), Ui.dp(190), Gravity.END or Gravity.CENTER_VERTICAL).also { it.rightMargin = Ui.dp(68) })
 
         label.setTextColor(Color.WHITE)
         label.textSize = 20f
@@ -212,7 +224,9 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
         label.visibility = GONE
         addView(label, LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.TOP or Gravity.CENTER_HORIZONTAL).also { it.topMargin = Ui.dp(76) })
 
-        // ---- Sliders ----
+        layoutControls(false)
+
+        // ---- Slider events ----
         seek.onStart = {
             scrubbing = true
             bump()
@@ -239,8 +253,10 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                files.getOrNull(player.currentMediaItemIndex)?.let { Recents.touch(it.path) }
                 updateTitle()
                 updateNav()
+                if (inBg) syncBg()
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -250,10 +266,12 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
                     bump()
                 }
                 updatePlayIcon()
+                if (inBg) syncBg()
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 updatePlayIcon()
+                if (inBg) syncBg()
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -261,8 +279,7 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
                 if (f != null) Open.fallback(act, this@VideoScreen, f.path)
             }
         })
-        val start = files.indexOfFirst { it.path == startPath }.coerceAtLeast(0)
-        player.setMediaItems(files.map { MediaItem.fromUri(android.net.Uri.fromFile(it)) }, start, 0L)
+        player.setMediaItems(files.map { item(it) }, 0, 0L)
         player.prepare()
         player.playWhenReady = true
 
@@ -284,12 +301,15 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
         applyHud()
         bump()
         post(ticker)
+        loadLibrary()
     }
+
+    private fun item(f: File): MediaItem = MediaItem.fromUri(Uri.fromFile(f))
 
     private fun btn(d: Drawable, sizeDp: Int, desc: String, onClick: () -> Unit): ImageView {
         val v = ImageView(act)
         v.setImageDrawable(d)
-        val pad = Ui.dp(if (sizeDp >= 56) 12 else 10)
+        val pad = Ui.dp(if (sizeDp >= 72) 12 else 10)
         v.setPadding(pad, pad, pad, pad)
         v.contentDescription = desc
         v.setOnClickListener {
@@ -297,6 +317,64 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
             onClick()
         }
         return v
+    }
+
+    // ---- Control rows: arranged for portrait or landscape ------------------------------------------
+
+    private fun free(vararg views: View) {
+        for (v in views) (v.parent as? ViewGroup)?.removeView(v)
+    }
+
+    private fun lp(dp: Int, endMarginDp: Int = 0): LinearLayout.LayoutParams =
+        Ui.lin(Ui.dp(dp), Ui.dp(dp)).also { it.rightMargin = Ui.dp(endMarginDp) }
+
+    /**
+     * Landscape: one row, play in the middle with 10-second buttons, previous and next around it,
+     * PiP and speed on the left, aspect ratio on the right. Portrait: previous / play / next
+     * centred with room around them, and a second row with PiP, speed and aspect ratio spread evenly.
+     * Re-parenting the buttons (instead of hiding some) keeps every layout exact after a rotation.
+     */
+    private fun layoutControls(land: Boolean) {
+        if (landMode == land) return
+        landMode = land
+        free(pipBtn, speedBtn, rewBtn, prevBtn, playBtn, nextBtn, fwdBtn, aspectBtn)
+        ctlRow.removeAllViews()
+        utilRow.removeAllViews()
+        if (land) {
+            val left = LinearLayout(act)
+            left.gravity = Gravity.CENTER_VERTICAL
+            left.addView(pipBtn, lp(48))
+            left.addView(speedBtn, Ui.lin(Ui.WRAP, Ui.dp(48)))
+            val center = LinearLayout(act)
+            center.gravity = Gravity.CENTER
+            center.addView(rewBtn, lp(60, 16))
+            center.addView(prevBtn, lp(60, 16))
+            center.addView(playBtn, lp(76, 16))
+            center.addView(nextBtn, lp(60, 16))
+            center.addView(fwdBtn, lp(60))
+            val right = LinearLayout(act)
+            right.gravity = Gravity.CENTER_VERTICAL
+            right.addView(aspectBtn, lp(48))
+            ctlRow.addView(left, LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.START or Gravity.CENTER_VERTICAL))
+            ctlRow.addView(center, LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.CENTER))
+            ctlRow.addView(right, LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.END or Gravity.CENTER_VERTICAL))
+            utilRow.visibility = GONE
+            bottom.setPadding(Ui.dp(24), Ui.dp(16), Ui.dp(24), Ui.dp(8))
+        } else {
+            val center = LinearLayout(act)
+            center.gravity = Gravity.CENTER
+            center.addView(prevBtn, lp(60, 28))
+            center.addView(playBtn, lp(76, 28))
+            center.addView(nextBtn, lp(60))
+            ctlRow.addView(center, LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.CENTER))
+            utilRow.addView(pipBtn, lp(48))
+            utilRow.addView(View(act), Ui.lin(0, 1, 1f))
+            utilRow.addView(speedBtn, Ui.lin(Ui.WRAP, Ui.dp(48)))
+            utilRow.addView(View(act), Ui.lin(0, 1, 1f))
+            utilRow.addView(aspectBtn, lp(48))
+            utilRow.visibility = VISIBLE
+            bottom.setPadding(Ui.dp(24), Ui.dp(16), Ui.dp(24), Ui.dp(56))
+        }
     }
 
     // ---- Lifecycle -----------------------------------------------------------------------------
@@ -317,25 +395,76 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
             player.release()
         } catch (e: Exception) {
         }
-        val lp = act.window.attributes
-        lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-        act.window.attributes = lp
+        if (VBg.active) {
+            VBg.active = false
+            VBg.onToggle = null
+            VBg.onClose = null
+            BgService.update()
+        }
+        val lpw = act.window.attributes
+        lpw.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        act.window.attributes = lpw
         act.viewerMode(false)
         act.rotatable(false)
     }
 
-    /** The window went away (home button, screen off, PiP closed): pause, unless in picture-in-picture. */
+    /**
+     * The window went away (home button, screen off, PiP closed). Normally the video pauses. With
+     * "audio in background" on, only the picture stops (the video track is switched off) and the sound
+     * keeps playing through the background service; when the window is back, the picture comes back at
+     * the point the sound has reached.
+     */
     override fun onWindowVisibilityChanged(visibility: Int) {
         super.onWindowVisibilityChanged(visibility)
-        if (visibility != VISIBLE && !inPip && alive) player.pause()
+        if (!alive || inPip) return
+        if (visibility != VISIBLE) {
+            if (audioMode && player.playWhenReady) goBackground() else player.pause()
+        } else if (inBg) {
+            comeBack()
+        }
+    }
+
+    private fun setVideoTrack(on: Boolean) {
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !on).build()
+    }
+
+    private fun goBackground() {
+        inBg = true
+        setVideoTrack(false)
+        VBg.onToggle = {
+            player.playWhenReady = !player.playWhenReady
+            syncBg()
+        }
+        VBg.onClose = {
+            player.pause()
+            VBg.active = false
+            BgService.update()
+        }
+        VBg.active = true
+        syncBg()
+    }
+
+    private fun comeBack() {
+        inBg = false
+        setVideoTrack(true)
+        VBg.active = false
+        VBg.onToggle = null
+        VBg.onClose = null
+        BgService.update()
+        updatePlayIcon()
+    }
+
+    private fun syncBg() {
+        VBg.name = files.getOrNull(player.currentMediaItemIndex)?.name ?: ""
+        VBg.playing = player.playWhenReady && player.playbackState != Player.STATE_ENDED
+        BgService.update()
     }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         super.onSizeChanged(w, h, ow, oh)
-        // Portrait: no separate 10-second buttons (gestures still seek).
-        val land = w > h
-        rewBtn.visibility = if (land) VISIBLE else GONE
-        fwdBtn.visibility = if (land) VISIBLE else GONE
+        // Re-arranging inside a layout pass can leave stale sizes, so do it right after.
+        post { if (alive) layoutControls(w > h) }
         if (ow != 0 && (w > h) != (ow > oh)) {
             playlist?.close()
             closeSpeed()
@@ -393,15 +522,17 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
         }
     }
 
-    /** One place decides what is visible: controls, sliders, and the lock button. */
+    /** One place decides what is visible: controls, edge buttons, the lock button and the sliders. */
     private fun applyHud() {
         val show = hud && !locked && !inPip
         fade(top, show)
         fade(bottom, show)
         fade(muteBtn, show)
-        val sliders = (show || adjusting) && !locked && !inPip
-        fade(volGroup, sliders)
-        fade(briGroup, sliders)
+        fade(audioBtn, show)
+        fade(rotateBtn, show)
+        val sliders = !locked && !inPip
+        fade(volSlider, adjVol && sliders)
+        fade(briSlider, adjBri && sliders)
         fade(lockBtn, if (inPip) false else if (locked) lockShown else hud)
     }
 
@@ -423,6 +554,11 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
         muted = !muted
         player.volume = if (muted) 0f else 1f
         muteBtn.setImageDrawable(PIcons.get(if (muted) PIcons.MUTE else PIcons.VOL))
+    }
+
+    private fun toggleAudioMode() {
+        audioMode = !audioMode
+        audioBtn.setImageDrawable(PIcons.get(PIcons.HEADSET, if (audioMode) PSlider.ACCENT else Color.WHITE))
     }
 
     // ---- GestureLayer.Host ------------------------------------------------------------------------
@@ -459,15 +595,21 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
 
     override fun onAdjust(volume: Boolean, delta: Float) {
         removeCallbacks(endAdjust)
-        if (!adjusting) {
-            adjusting = true
-            applyHud()
-        }
         if (volume) {
+            if (!adjVol) {
+                adjVol = true
+                adjBri = false
+                applyHud()
+            }
             setVolume((volFrac + delta).coerceIn(0f, 1f))
             volSlider.progress = volFrac
             showLabel("${(volFrac * 100f).toInt()}%")
         } else {
+            if (!adjBri) {
+                adjBri = true
+                adjVol = false
+                applyHud()
+            }
             setBrightness((briFrac + delta).coerceIn(0f, 1f))
             briSlider.progress = briFrac
             showLabel("${(briFrac * 100f).toInt()}%")
@@ -488,9 +630,9 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
     private fun setBrightness(f: Float) {
         briFrac = f
         sun.level = f
-        val lp = act.window.attributes
-        lp.screenBrightness = f.coerceIn(0.02f, 1f)
-        act.window.attributes = lp
+        val lpw = act.window.attributes
+        lpw.screenBrightness = f.coerceIn(0.02f, 1f)
+        act.window.attributes = lpw
     }
 
     // ---- Speed, aspect ratio, playlist, picture-in-picture ----------------------------------------
@@ -525,10 +667,10 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
         val r = IntArray(2)
         speedBtn.getLocationInWindow(a)
         getLocationInWindow(r)
-        val lp = LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.BOTTOM or Gravity.START)
-        lp.leftMargin = (a[0] - r[0]).coerceAtLeast(0)
-        lp.bottomMargin = (height - (a[1] - r[1]) + Ui.dp(6)).coerceAtLeast(0)
-        addView(m, lp)
+        val lpm = LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.BOTTOM or Gravity.START)
+        lpm.leftMargin = (a[0] - r[0]).coerceAtLeast(0)
+        lpm.bottomMargin = (height - (a[1] - r[1]) + Ui.dp(6)).coerceAtLeast(0)
+        addView(m, lpm)
         speedMenu = m
     }
 
@@ -552,15 +694,53 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
         )
     }
 
+    // ---- Playlist: every video on the phone, most recently opened first -------------------------------
+
+    /** Reads all videos from the media library in the background, orders them, and completes the queue. */
+    private fun loadLibrary() {
+        Files.pool.execute {
+            val paths = ArrayList<String>()
+            val seen = HashSet<String>()
+            try {
+                Files.streamMedia(Types.VIDEO, { false }) { list ->
+                    for (m in list) if (seen.add(m.path)) paths.add(m.path)
+                }
+            } catch (e: Exception) {
+            }
+            if (seen.add(startPath)) paths.add(0, startPath)
+            val rank = HashMap<String, Int>()
+            Recents.list().forEachIndexed { i, p -> rank[p] = i }
+            // Stable sort: never-opened videos stay in the library's own newest-first order.
+            val sorted = paths.filter { File(it).isFile }.sortedWith(compareBy<String> { rank[it] ?: Int.MAX_VALUE })
+            val allFiles = sorted.map { File(it) }
+            val playable = allFiles.filter { Open.kind(it.path) == Open.K_VIDEO }
+            FlitApp.main.post { applyLibrary(allFiles, playable) }
+        }
+    }
+
+    private fun applyLibrary(allFiles: List<File>, playable: List<File>) {
+        if (!alive) return
+        all = allFiles
+        if (player.mediaItemCount != 1) return
+        val curPath = files.getOrNull(player.currentMediaItemIndex)?.path ?: return
+        val idx = playable.indexOfFirst { it.path == curPath }
+        if (idx < 0) return
+        // The current video keeps playing; the others are added around it.
+        if (idx > 0) player.addMediaItems(0, playable.subList(0, idx).map { item(it) })
+        if (idx < playable.size - 1) player.addMediaItems(playable.subList(idx + 1, playable.size).map { item(it) })
+        files = playable
+        updateTitle()
+        updateNav()
+    }
+
     private fun openPlaylist() {
         if (playlist != null) return
         closeSpeed()
+        val list = if (all.isNotEmpty()) all else files
+        val curPath = files.getOrNull(player.currentMediaItemIndex)?.path
         val pl = PlaylistPanel(
-            act, files, player.currentMediaItemIndex, true, width > height,
-            { i ->
-                player.seekTo(i, 0L)
-                player.playWhenReady = true
-            },
+            act, list, list.indexOfFirst { it.path == curPath }.coerceAtLeast(0), true, width > height,
+            { i -> pick(list[i]) },
             {
                 playlist = null
                 bump()
@@ -568,6 +748,20 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
         )
         playlist = pl
         pl.open(this)
+    }
+
+    /** A row of the playlist was tapped: play it here, or hand it to Android's "Open with" if Flit cannot. */
+    private fun pick(f: File) {
+        Recents.touch(f.path)
+        if (Open.kind(f.path) == Open.K_VIDEO) {
+            val i = files.indexOfFirst { it.path == f.path }
+            if (i >= 0) {
+                player.seekTo(i, 0L)
+                player.playWhenReady = true
+                return
+            }
+        }
+        Open.external(act, f.path)
     }
 
     private fun enterPip() {
@@ -662,7 +856,6 @@ class VideoScreen(act: MainActivity, startPath: String) : Screen(act), GestureLa
             if (mode != 1 && target > 0f) {
                 val fitW = bw / bh > target
                 if (mode == 5) {
-                    // Best Fit: fill the screen, cropping what does not fit.
                     if (fitW) {
                         w = bw
                         h = bw / target
