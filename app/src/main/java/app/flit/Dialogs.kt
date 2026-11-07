@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.graphics.Color
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -233,6 +234,20 @@ object Dialogs {
             w.attributes = lp
         }
         return ExtractDialog(d, cur, pct, bar)
+    }
+
+    /** Red used for the Delete button and the Delete confirmation. */
+    const val RED = 0xFFC0392B.toInt()
+
+    /** "Delete selected files?" Cancel at the bottom-left, Delete (red) at the bottom-right. */
+    fun confirmDelete(a: Activity, count: Int, size: String, onDelete: () -> Unit) {
+        val (d, col) = frame(a, a.getString(R.string.delete_confirm_title), true)
+        message(a, col, a.resources.getQuantityString(R.plurals.delete_confirm_msg, count, count, size))
+        val del = pill(a, d, a.getString(R.string.btn_delete), true, onDelete)
+        del.setTextColor(Color.WHITE)
+        del.background = Ui.ripple(Ui.shape(RED, 100), 100)
+        splitButtons(a, col, pill(a, d, a.getString(R.string.v_cancel), false, null), del)
+        present(a, d)
     }
 
     /** Radio indicator: accent ring and dot when selected, grey ring otherwise. */
