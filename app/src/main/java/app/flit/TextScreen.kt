@@ -1,31 +1,23 @@
 package app.flit
 
 import android.content.Context
-import android.text.method.LinkMovementMethod
 import android.util.TypedValue
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.widget.ScrollView
 import android.widget.TextView
-import io.noties.markwon.Markwon
-import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
-import io.noties.markwon.ext.tables.TablePlugin
-import io.noties.markwon.ext.tasklist.TaskListPlugin
-import io.noties.markwon.html.HtmlPlugin
-import io.noties.markwon.linkify.LinkifyPlugin
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 
 /**
- * Read-only viewer for plain text and Markdown. Text is a normal selectable TextView, so Android's
- * own long-press / double-tap selection with handles and Copy works. Markdown is rendered as
- * formatted text (headings, emphasis, strikethrough, lists, task lists, tables, quotes, code, links, inline
- * HTML; images are not loaded) by Markwon. Pinch changes the
- * text size (the text re-wraps to the screen), a tap shows or hides the top bar.
+ * Read-only viewer for plain text. The text is a normal selectable TextView, so Android's own
+ * long-press / double-tap selection with handles and Copy works. Pinch changes the text size (the text
+ * re-wraps to the screen), a tap shows or hides the top bar. (Markdown is shown by [HtmlScreen].)
  */
-class TextScreen(act: MainActivity, private val path: String, private val md: Boolean) : Screen(act) {
+class TextScreen(act: MainActivity, private val path: String) : Screen(act) {
 
     private val bar = ViewerBar(act, path)
     private val frame = TapFrame(act)
@@ -48,7 +40,7 @@ class TextScreen(act: MainActivity, private val path: String, private val md: Bo
         frame.addView(scroll, LayoutParams(Ui.MATCH, Ui.MATCH))
         frame.onTap = { bar.toggle() }
         addView(frame, LayoutParams(Ui.MATCH, Ui.MATCH))
-        addView(bar, LayoutParams(Ui.MATCH, Ui.WRAP, android.view.Gravity.TOP))
+        addView(bar, LayoutParams(Ui.MATCH, Ui.WRAP, Gravity.TOP))
         load()
     }
 
@@ -64,39 +56,15 @@ class TextScreen(act: MainActivity, private val path: String, private val md: Bo
                     FlitApp.main.post { if (alive) Open.fallback(act, this, path) }
                     return@execute
                 }
-                if (md) {
-                    // Everything Markdown has: headings, emphasis, strikethrough, lists, task lists,
-                    // tables, block quotes, code, rules, links (also bare URLs) and inline HTML.
-                    val mw = Markwon.builder(act)
-                        .usePlugin(StrikethroughPlugin.create())
-                        .usePlugin(TablePlugin.create(act))
-                        .usePlugin(TaskListPlugin.create(act))
-                        .usePlugin(HtmlPlugin.create())
-                        .usePlugin(LinkifyPlugin.create())
-                        .build()
-                    val spanned = mw.render(mw.parse(text))
-                    FlitApp.main.post {
-                        if (!alive) return@post
-                        mw.setParsedMarkdown(tv, spanned)
-                        selectable()
-                    }
-                } else {
-                    FlitApp.main.post {
-                        if (!alive) return@post
-                        tv.text = text
-                        selectable()
-                    }
+                FlitApp.main.post {
+                    if (!alive) return@post
+                    tv.text = text
+                    tv.setTextIsSelectable(true)
                 }
             } catch (e: Throwable) {
                 FlitApp.main.post { if (alive) Open.fallback(act, this, path) }
             }
         }
-    }
-
-    /** Selection stays on, and links in Markdown can still be tapped. */
-    private fun selectable() {
-        tv.setTextIsSelectable(true)
-        if (md) tv.movementMethod = LinkMovementMethod.getInstance()
     }
 
     /** UTF-8 (with or without BOM); a file that is not valid UTF-8 is read as Latin-1. */
