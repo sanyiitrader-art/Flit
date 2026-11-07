@@ -27,6 +27,9 @@ class PSlider(c: Context, private val vertical: Boolean = false) : View(c) {
     var dragging = false
         private set
 
+    /** When set, this icon is the thumb: it turns and grows as the value goes up, and back down. */
+    var thumbIcon: PIcon? = null
+
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     private val pad = Ui.dpf(12)
     private val track = Ui.dpf(3)
@@ -60,7 +63,19 @@ class PSlider(c: Context, private val vertical: Boolean = false) : View(c) {
             c.drawLine(left, y, thumbX, y, p)
         }
         p.color = ACCENT
-        c.drawCircle(thumbX, thumbY, Ui.dpf(if (dragging) 9 else 7), p)
+        val icon = thumbIcon
+        if (icon != null) {
+            val half = Ui.dpf(15) * (0.7f + 0.6f * progress)
+            icon.color = ACCENT
+            icon.level = progress
+            icon.setBounds((thumbX - half).toInt(), (thumbY - half).toInt(), (thumbX + half).toInt(), (thumbY + half).toInt())
+            c.save()
+            c.rotate(progress * 540f, thumbX, thumbY)
+            icon.draw(c)
+            c.restore()
+        } else {
+            c.drawCircle(thumbX, thumbY, Ui.dpf(if (dragging) 9 else 7), p)
+        }
     }
 
     private fun fraction(e: MotionEvent): Float {
