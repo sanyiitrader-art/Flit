@@ -154,6 +154,12 @@ class MainActivity : Activity(), Xfer.Hook {
         }
     }
 
+    /** The video player's rotate button: force landscape or portrait. */
+    fun forceOrientation(landscape: Boolean) {
+        requestedOrientation = if (landscape) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+    }
+
     /** The video player allows landscape (following the phone's rotation lock); everything else is portrait. */
     fun rotatable(on: Boolean) {
         requestedOrientation = if (on) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_USER
