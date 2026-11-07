@@ -221,13 +221,13 @@ dependencies {
     // Built-in video and audio player (pure Java/Kotlin, no native code, Apache 2.0).
     implementation("androidx.media3:media3-exoplayer:1.8.0")
 
-    // Markdown shown as formatted text inside a normal selectable TextView (Apache 2.0).
-    implementation("io.noties.markwon:core:4.6.2")
-    implementation("io.noties.markwon:ext-strikethrough:4.6.2")
-    implementation("io.noties.markwon:ext-tables:4.6.2")
-    implementation("io.noties.markwon:ext-tasklist:4.6.2")
-    implementation("io.noties.markwon:html:4.6.2")
-    implementation("io.noties.markwon:linkify:4.6.2")
+    // Markdown to HTML (shown in the viewer's WebView). Pure Java, BSD-2.
+    implementation("org.commonmark:commonmark:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.24.0")
+    implementation("org.commonmark:commonmark-ext-task-list-items:0.24.0")
+    implementation("org.commonmark:commonmark-ext-autolink:0.24.0")
+    implementation("org.commonmark:commonmark-ext-footnotes:0.24.0")
 
     // SVG images (pure Java, Apache 2.0).
     implementation("com.caverock:androidsvg-aar:1.4")
