@@ -1,6 +1,8 @@
 package app.flit
 
 import android.content.Context
+import android.graphics.Color
+import android.media.MediaScannerConnection
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -13,6 +15,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
+import java.io.File
 
 /** Tab underline: a hairline across the strip with an accent segment that follows the pager. */
 private class Indicator(c: Context) : View(c) {
@@ -31,6 +34,33 @@ private class Indicator(c: Context) : View(c) {
         c.drawRect(0f, height - Ui.dpf(1), width.toFloat(), height.toFloat(), p)
         p.color = Ui.cAccent
         c.drawRect(l, height - Ui.dpf(3), l + wd, height.toFloat(), p)
+    }
+}
+
+/** "Delete N": grey and inactive with nothing selected, red and tappable otherwise (same shape as Send). */
+private class DeleteButton(c: Context) : TextView(c) {
+
+    init {
+        gravity = Gravity.CENTER
+        textSize = 15f
+        typeface = Typeface.DEFAULT_BOLD
+        includeFontPadding = false
+        letterSpacing = 0.04f
+        setPadding(Ui.dp(28), Ui.dp(15), Ui.dp(28), Ui.dp(15))
+        isClickable = true
+        isFocusable = true
+        restyle()
+    }
+
+    override fun setEnabled(enabled: Boolean) {
+        super.setEnabled(enabled)
+        restyle()
+    }
+
+    private fun restyle() {
+        val on = isEnabled
+        setTextColor(if (on) Color.WHITE else Ui.cText2)
+        background = Ui.ripple(Ui.shape(if (on) Dialogs.RED else Ui.cSurface3, 100), 100)
     }
 }
 
@@ -57,6 +87,7 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener, Live {
     private val indicator = Indicator(act)
     private val pager = ViewPager2(act)
     private val send = Pill(act, "", true)
+    private val del = DeleteButton(act)
     private var storageGen = 0
 
     init {
@@ -154,8 +185,65 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener, Live {
                 it.setMargins(0, 0, Ui.dp(16), Ui.dp(16))
             }
         )
+        // Delete button on the same row, at the left.
+        del.setOnClickListener { confirmDelete() }
+        addView(
+            del,
+            FrameLayout.LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.BOTTOM or Gravity.START).also {
+                it.setMargins(Ui.dp(16), 0, 0, Ui.dp(16))
+            }
+        )
         showStorage(lastUsed, lastTotal) // last known value right away, refreshed below in the background
         updateSend()
+    }
+
+    // ---- Delete ----------------------------------------------------------------------------------
+
+    /** Asks first. Installed apps in the selection cannot be deleted here, only files and folders. */
+    private fun confirmDelete() {
+        val files = Sel.snapshot().filter { it.key.startsWith("f:") }
+        if (files.isEmpty()) {
+            if (Sel.count > 0) Ui.toast(act, R.string.v_delete_apps)
+            return
+        }
+        var size = 0L
+        for (f in files) size += f.size
+        Dialogs.confirmDelete(act, files.size, Types.size(size)) { deleteSelected(files) }
+    }
+
+    private fun deleteSelected(files: List<Item>) {
+        val folders = Sel.selectedFolders()
+        val tops = folders.filter { f -> folders.none { o -> o != f && f.startsWith("$o/") } }
+        Files.pool.execute {
+            var failed = 0
+            val gone = ArrayList<String>()
+            for (d in tops) {
+                val dir = File(d)
+                if (dir.path == Files.root.path || Files.isRestricted(dir)) continue
+                Unpack.deleteTree(dir)
+                if (dir.exists()) failed++
+            }
+            for (it in files) {
+                val f = File(it.path)
+                if (!f.exists() || f.delete()) {
+                    if (gone.size < 2000) gone.add(f.path)
+                } else {
+                    failed++
+                }
+            }
+            FlitApp.main.post {
+                for (it in files) if (!File(it.path).exists()) Sel.remove(it.key)
+                for (d in tops) if (!File(d).exists()) Sel.removeFolder(d)
+                if (gone.isNotEmpty()) {
+                    try {
+                        MediaScannerConnection.scanFile(FlitApp.app, gone.toTypedArray(), null, null)
+                    } catch (e: Exception) {
+                    }
+                }
+                Ui.toast(act, if (failed > 0) R.string.v_delete_failed else R.string.v_deleted)
+                updateStorage()
+            }
+        }
     }
 
     private fun styleTabs(sel: Int) {
@@ -217,6 +305,8 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener, Live {
         val n = Sel.count
         send.text = act.getString(R.string.send_count, n)
         send.isEnabled = n > 0
+        del.text = act.getString(R.string.btn_delete) + " " + n
+        del.isEnabled = n > 0
     }
 
     override fun onChanged() {
