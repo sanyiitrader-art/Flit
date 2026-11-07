@@ -108,6 +108,24 @@ object Audio {
         changed()
     }
 
+    /**
+     * Replaces the queue by [list] (the same tracks in the library's order) around the track that is
+     * playing now. That track keeps playing without a break.
+     */
+    fun reorder(list: List<File>) {
+        val pl = p ?: return
+        val cur = current ?: return
+        val idx = list.indexOfFirst { it.path == cur.path }
+        if (idx < 0) return
+        val i = pl.currentMediaItemIndex
+        if (i < pl.mediaItemCount - 1) pl.removeMediaItems(i + 1, pl.mediaItemCount)
+        if (i > 0) pl.removeMediaItems(0, i)
+        if (idx > 0) pl.addMediaItems(0, list.subList(0, idx).map { MediaItem.fromUri(Uri.fromFile(it)) })
+        if (idx < list.size - 1) pl.addMediaItems(list.subList(idx + 1, list.size).map { MediaItem.fromUri(Uri.fromFile(it)) })
+        files = list
+        changed()
+    }
+
     fun toggle() {
         val pl = p ?: return
         if (pl.playbackState == Player.STATE_ENDED) {
