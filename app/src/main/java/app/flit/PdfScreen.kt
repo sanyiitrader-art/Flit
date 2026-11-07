@@ -6,8 +6,8 @@ import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import android.util.LruCache
-import android.view.Gravity
 import android.view.GestureDetector
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.ViewGroup
@@ -19,15 +19,25 @@ import androidx.recyclerview.widget.RecyclerView
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Minimal PDF viewer on Android's own PdfRenderer (no library): vertical scrolling through the
- * pages, a tap shows or hides the top bar. Pinch-to-zoom is live: the pages change size with every
- * movement of your fingers (using the sharpest picture already rendered), and are re-rendered sharp
- * as soon as you pause or let go. A password-protected or damaged PDF is offered to other apps.
+ * Minimal PDF viewer on Android's own PdfRenderer (no library).
+ *
+ *  - Opens at once: only the page count and the first page's size are read up front; every other
+ *    page is sized like the first until it is rendered (a different real size corrects itself).
+ *  - Pages are rendered 1.5 times wider than the screen, so zooming up to 1.5x never needs a new
+ *    render. Zooming further renders once, after you let go. Pages that scrolled off screen before
+ *    their turn are skipped.
+ *  - Pinch zoom follows your fingers smoothly (the whole page column is scaled on screen) and is
+ *    committed when you let go, keeping the spot between your fingers where it was.
+ *  - A tap shows or hides the top bar. A password-protected or damaged PDF goes to "Open with".
  */
 class PdfScreen(act: MainActivity, private val path: String) : Screen(act) {
+
+    private class Rendered(val bmp: Bitmap, val pw: Int, val ph: Int)
 
     private val bar = ViewerBar(act, path)
     private val pinch = PinchFrame(act)
@@ -38,26 +48,18 @@ class PdfScreen(act: MainActivity, private val path: String) : Screen(act) {
 
     private var pfd: ParcelFileDescriptor? = null
     private var pr: PdfRenderer? = null
-    private var sizes: List<IntArray> = emptyList()
+    private var sizes = ArrayList<IntArray>()
     private var zoom = 1f
-    private var pinching = false
+    private var live = 1f
+    private var pfx = 0f
+    private var pfy = 0f
     private var started = false
     private var alive = true
 
     private val cache = object : LruCache<String, Bitmap>(
-        (Runtime.getRuntime().maxMemory() / 8L / 1024L).toInt().coerceAtLeast(8 * 1024)
+        (Runtime.getRuntime().maxMemory() / 6L / 1024L).toInt().coerceAtLeast(8 * 1024)
     ) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
-    }
-
-    /** Re-renders the pages on screen at the current zoom (after a pause in the pinch, or its end). */
-    private val sharpen = Runnable {
-        for (i in 0 until rv.childCount) {
-            val c = rv.getChildAt(i)
-            val h = rv.getChildViewHolder(c)
-            val p = h.bindingAdapterPosition
-            if (p != RecyclerView.NO_POSITION) request(c as ImageView, p)
-        }
     }
 
     init {
@@ -75,13 +77,21 @@ class PdfScreen(act: MainActivity, private val path: String) : Screen(act) {
         addView(bar, LayoutParams(Ui.MATCH, Ui.WRAP, Gravity.TOP))
 
         pinch.onTap = { bar.toggle() }
-        pinch.onBegin = { pinching = true }
-        pinch.onScale = { f, fx, fy -> zoomBy(f, fx, fy) }
-        pinch.onEnd = {
-            pinching = false
-            removeCallbacks(sharpen)
-            post(sharpen)
+        pinch.onBegin = { fx, fy ->
+            pfx = fx
+            pfy = fy
+            live = 1f
         }
+        pinch.onScale = { f ->
+            if (sizes.isNotEmpty()) {
+                live = (live * f).coerceIn(1f / zoom, MAX_ZOOM / zoom)
+                hs.pivotX = pfx
+                hs.pivotY = pfy
+                hs.scaleX = live
+                hs.scaleY = live
+            }
+        }
+        pinch.onEnd = { commit() }
     }
 
     override fun onShow() {
@@ -93,13 +103,14 @@ class PdfScreen(act: MainActivity, private val path: String) : Screen(act) {
                 pfd = d
                 val r = PdfRenderer(d) // throws for password-protected or damaged files
                 pr = r
-                val list = ArrayList<IntArray>(r.pageCount)
-                for (i in 0 until r.pageCount) {
-                    val p = r.openPage(i)
-                    list.add(intArrayOf(p.width.coerceAtLeast(1), p.height.coerceAtLeast(1)))
-                    p.close()
-                }
-                if (list.isEmpty()) throw IllegalStateException("no pages")
+                val n = r.pageCount
+                if (n <= 0) throw IllegalStateException("no pages")
+                val first = r.openPage(0)
+                val w = first.width.coerceAtLeast(1)
+                val h = first.height.coerceAtLeast(1)
+                first.close()
+                val list = ArrayList<IntArray>(n)
+                for (i in 0 until n) list.add(intArrayOf(w, h))
                 FlitApp.main.post {
                     if (!alive) return@post
                     sizes = list
@@ -114,7 +125,6 @@ class PdfScreen(act: MainActivity, private val path: String) : Screen(act) {
 
     override fun onDestroyed() {
         alive = false
-        removeCallbacks(sharpen)
         exec.execute {
             try {
                 pr?.close()
@@ -127,7 +137,7 @@ class PdfScreen(act: MainActivity, private val path: String) : Screen(act) {
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         super.onSizeChanged(w, h, ow, oh)
-        if (w != ow) {
+        if (w != ow && sizes.isNotEmpty()) {
             applyWidth()
             adapter.notifyDataSetChanged()
         }
@@ -140,42 +150,54 @@ class PdfScreen(act: MainActivity, private val path: String) : Screen(act) {
         rv.layoutParams = lp
     }
 
-    /** One step of the pinch: change the real size now, keeping the point between the fingers in place. */
-    private fun zoomBy(f: Float, fx: Float, fy: Float) {
-        if (sizes.isEmpty()) return
-        val nz = (zoom * f).coerceIn(1f, MAX_ZOOM)
-        val ratio = nz / zoom
-        if (ratio == 1f) return
+    /** Width the pages are rendered at: 1.5x the screen at least, up to a memory-safe limit. */
+    private fun renderWidth(): Int = min((width * max(zoom, BASE_RENDER)).toInt(), MAX_RENDER).coerceAtLeast(1)
+
+    /** End of a pinch: make the zoom real, keeping the content that was between the fingers in place. */
+    private fun commit() {
+        val ratio = live
+        live = 1f
+        hs.scaleX = 1f
+        hs.scaleY = 1f
+        if (sizes.isEmpty() || abs(ratio - 1f) < 0.02f) return
+        val nz = (zoom * ratio).coerceIn(1f, MAX_ZOOM)
+        val r = nz / zoom
+        if (abs(r - 1f) < 0.005f) return
         val lm = rv.layoutManager as LinearLayoutManager
-        val first = lm.findFirstVisibleItemPosition()
-        val off = lm.findViewByPosition(first)?.top ?: 0
+        val child = rv.findChildViewUnder(pfx + hs.scrollX, pfy)
+        val pos = if (child != null) rv.getChildAdapterPosition(child) else lm.findFirstVisibleItemPosition()
+        val frac = if (child != null && child.height > 0) ((pfy - child.top) / child.height).coerceIn(0f, 1f) else 0f
         val sx = hs.scrollX
         zoom = nz
         applyWidth()
         adapter.notifyDataSetChanged()
-        if (first >= 0) lm.scrollToPositionWithOffset(first, (fy + (off - fy) * ratio).toInt())
-        hs.post { hs.scrollTo(((sx + fx) * ratio - fx).toInt().coerceAtLeast(0), 0) } // after the new width is laid out
-        removeCallbacks(sharpen)
-        postDelayed(sharpen, 180L)
+        if (pos >= 0 && pos < sizes.size) {
+            val sz = sizes[pos]
+            val newH = width * zoom * sz[1] / sz[0]
+            lm.scrollToPositionWithOffset(pos, (pfy - frac * newH - rv.paddingTop).toInt())
+        }
+        hs.post { hs.scrollTo(((sx + pfx) * r - pfx).toInt().coerceAtLeast(0), 0) }
     }
 
     // ---- Pages ---------------------------------------------------------------------------------------
 
-    private fun render(i: Int, w: Int): Bitmap? {
+    private fun render(i: Int, w: Int): Rendered? {
         val r = pr ?: return null
         val p = r.openPage(i)
         return try {
-            val h = (w.toFloat() * p.height / p.width).toInt().coerceAtLeast(1)
+            val pw = p.width.coerceAtLeast(1)
+            val ph = p.height.coerceAtLeast(1)
+            val h = (w.toFloat() * ph / pw).toInt().coerceAtLeast(1)
             val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             b.eraseColor(Color.WHITE)
             p.render(b, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            b
+            Rendered(b, pw, ph)
         } finally {
             p.close()
         }
     }
 
-    /** The widest picture of this page that is already rendered (shown stretched until a sharp one arrives). */
+    /** The widest picture of this page that is already rendered (shown stretched until the right one arrives). */
     private fun anyBitmap(position: Int): Bitmap? {
         var best: Bitmap? = null
         val prefix = "$position:"
@@ -183,28 +205,6 @@ class PdfScreen(act: MainActivity, private val path: String) : Screen(act) {
             if (k.startsWith(prefix) && (best == null || v.width > best.width)) best = v
         }
         return best
-    }
-
-    /** Shows the sharp picture if there is one, otherwise a stretched one, and renders the sharp one. */
-    private fun request(img: ImageView, position: Int) {
-        val w = (width * zoom).toInt().coerceAtLeast(1)
-        val rw = min(w, MAX_RENDER)
-        val key = "$position:$rw"
-        img.tag = key
-        val hit = cache.get(key)
-        if (hit != null) {
-            img.setImageBitmap(hit)
-            return
-        }
-        if (img.drawable == null) img.setImageBitmap(anyBitmap(position))
-        exec.execute {
-            try {
-                val b = render(position, rw) ?: return@execute
-                cache.put(key, b)
-                FlitApp.main.post { if (alive && img.tag == key) img.setImageBitmap(b) }
-            } catch (e: Throwable) {
-            }
-        }
     }
 
     private inner class Ad : RecyclerView.Adapter<VH>() {
@@ -224,16 +224,33 @@ class PdfScreen(act: MainActivity, private val path: String) : Screen(act) {
             val w = (width * zoom).toInt().coerceAtLeast(1)
             val ph = (w.toFloat() * sz[1] / sz[0]).toInt().coerceAtLeast(1)
             img.layoutParams = RecyclerView.LayoutParams(w, ph).also { it.bottomMargin = Ui.dp(6) }
-            val key = "$position:${min(w, MAX_RENDER)}"
-            val hit = cache.get(key)
+            val rw = renderWidth()
+            val key = "$position:$rw"
             img.tag = key
+            val hit = cache.get(key)
             if (hit != null) {
                 img.setImageBitmap(hit)
                 return
             }
-            // Something is on screen at once (stretched if need be); the sharp render follows.
-            img.setImageBitmap(anyBitmap(position))
-            if (!pinching) request(img, position)
+            img.setImageBitmap(anyBitmap(position)) // something right away; the proper render follows
+            exec.execute {
+                // The page may have scrolled away (and the view been reused) before its turn.
+                if (!alive || img.tag != key) return@execute
+                try {
+                    val r = render(position, rw) ?: return@execute
+                    cache.put(key, r.bmp)
+                    FlitApp.main.post {
+                        if (!alive) return@post
+                        if (img.tag == key) img.setImageBitmap(r.bmp)
+                        val s = sizes.getOrNull(position)
+                        if (s != null && (s[0] != r.pw || s[1] != r.ph)) {
+                            sizes[position] = intArrayOf(r.pw, r.ph)
+                            adapter.notifyItemChanged(position)
+                        }
+                    }
+                } catch (e: Throwable) {
+                }
+            }
         }
     }
 
@@ -241,8 +258,8 @@ class PdfScreen(act: MainActivity, private val path: String) : Screen(act) {
     private class PinchFrame(c: Context) : FrameLayout(c) {
 
         var onTap: (() -> Unit)? = null
-        var onBegin: (() -> Unit)? = null
-        var onScale: ((Float, Float, Float) -> Unit)? = null
+        var onBegin: ((Float, Float) -> Unit)? = null
+        var onScale: ((Float) -> Unit)? = null
         var onEnd: (() -> Unit)? = null
 
         private val tap = GestureDetector(c, object : GestureDetector.SimpleOnGestureListener() {
@@ -254,12 +271,12 @@ class PdfScreen(act: MainActivity, private val path: String) : Screen(act) {
 
         private val det = ScaleGestureDetector(c, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
-                this@PinchFrame.onBegin?.invoke()
+                this@PinchFrame.onBegin?.invoke(d.focusX, d.focusY)
                 return true
             }
 
             override fun onScale(d: ScaleGestureDetector): Boolean {
-                this@PinchFrame.onScale?.invoke(d.scaleFactor, d.focusX, d.focusY)
+                this@PinchFrame.onScale?.invoke(d.scaleFactor)
                 return true
             }
 
@@ -284,6 +301,7 @@ class PdfScreen(act: MainActivity, private val path: String) : Screen(act) {
 
     private companion object {
         const val MAX_ZOOM = 4f
+        const val BASE_RENDER = 1.5f
         const val MAX_RENDER = 2400
     }
 }
