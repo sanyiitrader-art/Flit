@@ -103,6 +103,7 @@ class MainActivity : Activity(), Xfer.Hook {
         root.post {
             Files.watch()
             Files.prefetchApps()
+            Files.pool.execute { Uris.purge(applicationContext) }
         }
     }
 
@@ -245,6 +246,20 @@ class MainActivity : Activity(), Xfer.Hook {
     // ---- Notification taps -------------------------------------------------------------
 
     private fun handleGo(i: Intent?) {
+        if (i != null) {
+            val what = i.action
+            if (what == Intent.ACTION_VIEW) {
+                val uri = i.data
+                val type = i.type
+                i.action = Intent.ACTION_MAIN // handled once
+                if (uri != null) openViewed(uri, type)
+            } else if (what == Intent.ACTION_SEND || what == Intent.ACTION_SEND_MULTIPLE) {
+                val uris = Uris.streams(i)
+                val type = i.type
+                i.action = Intent.ACTION_MAIN
+                if (uris.isNotEmpty()) openShared(uris, type)
+            }
+        }
         if (i?.getBooleanExtra(BgService.EXTRA_EXTRACT, false) == true) {
             i.removeExtra(BgService.EXTRA_EXTRACT)
             Extractor.reopen(this) // tapped the extraction notification: show the progress dialog again
@@ -263,6 +278,37 @@ class MainActivity : Activity(), Xfer.Hook {
         super.onNewIntent(intent)
         setIntent(intent)
         handleGo(intent)
+    }
+
+    // ---- Open With / Share With ---------------------------------------------------------------------
+
+    /** Android's "Open with" chose Flit: open the file straight in the matching viewer, player or extractor. */
+    private fun openViewed(uri: android.net.Uri, type: String?) {
+        val app = applicationContext
+        Files.pool.execute {
+            val f = Uris.resolve(app, uri, type)
+            FlitApp.main.post {
+                if (isFinishing || isDestroyed) return@post
+                if (f != null) Open.file(this, f.path) else Ui.toast(this, R.string.v_open_failed)
+            }
+        }
+    }
+
+    /** Android's "Share" chose Flit: open the Sender with the shared files selected and shown. */
+    private fun openShared(uris: List<android.net.Uri>, type: String?) {
+        val app = applicationContext
+        Files.pool.execute {
+            val files = uris.mapNotNull { Uris.resolve(app, it, type) }
+            FlitApp.main.post {
+                if (isFinishing || isDestroyed) return@post
+                if (files.isEmpty()) {
+                    Ui.toast(this, R.string.v_open_failed)
+                    return@post
+                }
+                val s = (stack.lastOrNull() as? SenderScreen) ?: SenderScreen(this).also { push(it) }
+                s.showShared(files)
+            }
+        }
     }
 
     // ---- Xfer.Hook (main thread) -------------------------------------------------------
