@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="v_deleted">Eliminado.</string>
+    <string name="v_delete_failed">No se pudieron eliminar algunos archivos.</string>
+    <string name="v_delete_apps">Las aplicaciones instaladas no se pueden eliminar aquí.</string>
+</resources>
