@@ -183,6 +183,7 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
     private var firstPending = false
     private var loadedAt = 0L
     private var loadedVer = -1
+    private var pendingReveal: String? = null
     private val px: Int by lazy { Ui.dp(if (kind == Types.IMAGE) 120 else 96) }
 
     init {
@@ -218,6 +219,23 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
         val now = System.currentTimeMillis()
         val changed = Files.version(kind) != loadedVer
         if (!loaded || changed || now - loadedAt > 300_000L) load() else updateNotice()
+    }
+
+    /** Share With: scrolls to [path] as soon as it is in the list (the list may still be loading). */
+    fun reveal(path: String) {
+        pendingReveal = path
+        tryReveal()
+    }
+
+    private fun tryReveal() {
+        val p = pendingReveal ?: return
+        val i = data.indexOfFirst { it.path == p }
+        if (i < 0) return
+        pendingReveal = null
+        rv.post {
+            val lm = rv.layoutManager as? LinearLayoutManager
+            if (lm != null) lm.scrollToPositionWithOffset(i, Ui.dp(24)) else rv.scrollToPosition(i)
+        }
     }
 
     /** Debounced change from MediaStore. Reloads only if this tab is on screen. */
@@ -257,6 +275,8 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
                     loadedAt = System.currentTimeMillis()
                     loadedVer = ver
                     updateNotice()
+                    tryReveal()
+                    pendingReveal = null // not in the library (yet): do not jump on later reloads
                     // Something changed while we were loading: go again.
                     if (isShown && Files.version(kind) != ver) load()
                 }
@@ -281,6 +301,7 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
             data.addAll(chunk)
             adapter.notifyItemRangeInserted(start, chunk.size)
         }
+        tryReveal()
     }
 
     private fun updateNotice() {
