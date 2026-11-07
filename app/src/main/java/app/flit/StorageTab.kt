@@ -35,6 +35,7 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener, Live {
 
     @Volatile
     private var dirty = false
+    private var revealPath: String? = null
     private var obs: FileObserver? = null
     private val refresh = Runnable { if (dirty && isShown && Perms.hasStorage()) load(false) }
 
@@ -69,6 +70,15 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener, Live {
         addView(body, Ui.lin(Ui.MATCH, 0, 1f))
 
         updateHeader()
+    }
+
+    /** Share With: opens the folder that contains [path] and scrolls to the file. */
+    fun reveal(path: String) {
+        val dir = File(path).parentFile ?: return
+        if (!dir.path.startsWith(Files.root.path)) return // e.g. a temporary copy: not browsable here
+        cur = dir
+        revealPath = path
+        load(false)
     }
 
     /** Goes one folder up. Returns false when already at the storage root. */
@@ -168,6 +178,11 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener, Live {
                         entries = list ?: emptyList()
                         adapter.notifyDataSetChanged()
                         if (scrollTop) rv.scrollToPosition(0)
+                        revealPath?.let { p ->
+                            revealPath = null
+                            val i = entries.indexOfFirst { it.path == p }
+                            if (i >= 0) rv.post { (rv.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(i, Ui.dp(24)) }
+                        }
                         when {
                             list == null -> notice.set(context.getString(R.string.folder_restricted))
                             list.isEmpty() -> notice.set(context.getString(R.string.folder_empty))
