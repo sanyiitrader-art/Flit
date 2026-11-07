@@ -1,3 +1,4 @@
+build.gradle.kts
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
@@ -223,6 +224,11 @@ dependencies {
 
     // Markdown shown as formatted text inside a normal selectable TextView (Apache 2.0).
     implementation("io.noties.markwon:core:4.6.2")
+    implementation("io.noties.markwon:ext-strikethrough:4.6.2")
+    implementation("io.noties.markwon:ext-tables:4.6.2")
+    implementation("io.noties.markwon:ext-tasklist:4.6.2")
+    implementation("io.noties.markwon:html:4.6.2")
+    implementation("io.noties.markwon:linkify:4.6.2")
 
     // SVG images (pure Java, Apache 2.0).
     implementation("com.caverock:androidsvg-aar:1.4")
