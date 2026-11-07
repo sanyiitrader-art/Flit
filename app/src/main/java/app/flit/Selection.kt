@@ -81,6 +81,9 @@ object Sel {
 
     fun isFolderSelected(path: String): Boolean = folders.contains(path)
 
+    /** Paths of the folders currently marked as selected. */
+    fun selectedFolders(): List<String> = ArrayList(folders)
+
     /** Marks the folder and adds all its (already expanded) files, skipping duplicates. */
     fun addFolder(path: String, files: List<Item>) {
         folders.add(path)
