@@ -45,6 +45,9 @@ object PIcons {
     const val ASPECT = 13
     const val LIST = 14
     const val BRIGHT = 15
+    const val ROTATE = 16
+    const val HEADSET = 17
+    const val SQUARE = 18
 
     fun get(kind: Int, color: Int = Color.WHITE): PIcon = PIcon(kind, color)
 }
@@ -103,11 +106,11 @@ class PIcon(private val kind: Int, color: Int) : Drawable() {
                 c.scale(-1f, 1f)
                 skip(c)
                 c.restore()
-                label(c, "10", 14.6f, 7.4f)
+                label(c, "10", 16.2f, 9f)
             }
             PIcons.FWD10 -> {
                 skip(c)
-                label(c, "10", 14.6f, 7.4f)
+                label(c, "10", 16.2f, 9f)
             }
             PIcons.SHUFFLE -> {
                 val q = Path()
@@ -169,6 +172,24 @@ class PIcon(private val kind: Int, color: Int) : Drawable() {
                     stroke()
                 }
             }
+            PIcons.ROTATE -> {
+                stroke()
+                c.drawArc(RectF(4f, 4f, 20f, 20f), 195f, 105f, false, p)
+                head(c, 12f + 8f * cos(Math.toRadians(300.0)).toFloat(), 12f + 8f * sin(Math.toRadians(300.0)).toFloat(), 0.866f, 0.5f)
+                c.drawArc(RectF(4f, 4f, 20f, 20f), 15f, 105f, false, p)
+                head(c, 12f + 8f * cos(Math.toRadians(120.0)).toFloat(), 12f + 8f * sin(Math.toRadians(120.0)).toFloat(), -0.866f, -0.5f)
+                c.drawRoundRect(RectF(9.6f, 8f, 14.4f, 16f), 1.2f, 1.2f, p)
+            }
+            PIcons.HEADSET -> {
+                stroke()
+                c.drawArc(RectF(4.5f, 3.5f, 19.5f, 18.5f), 180f, 180f, false, p)
+                fill()
+                c.drawRoundRect(RectF(3.5f, 11.5f, 8f, 19.5f), 2f, 2f, p)
+                c.drawRoundRect(RectF(16f, 11.5f, 20.5f, 19.5f), 2f, 2f, p)
+            }
+            PIcons.SQUARE -> {
+                c.drawRoundRect(RectF(5f, 5f, 19f, 19f), 3f, 3f, p)
+            }
             PIcons.BRIGHT -> {
                 fill()
                 p.alpha = (Color.alpha(color) * a / 255) * 35 / 100
@@ -215,25 +236,27 @@ class PIcon(private val kind: Int, color: Int) : Drawable() {
         poly(c, true, 4f, 9f, 8f, 9f, 13f, 5f, 13f, 19f, 8f, 15f, 4f, 15f)
     }
 
-    /** Circular arrow of the 10-second skip icons (clockwise, arrow head at the top). */
-    private fun skip(c: Canvas) {
-        stroke()
-        c.drawArc(RectF(4f, 5f, 20f, 21f), -60f, 300f, false, p)
-        // Arrow head at the end of the arc (240 degrees), pointing along the clockwise tangent.
-        val ex = 12f + 8f * cos(Math.toRadians(240.0)).toFloat()
-        val ey = 13f + 8f * sin(Math.toRadians(240.0)).toFloat()
-        val dx = 0.866f
-        val dy = -0.5f
-        val px = 0.5f
-        val py = 0.866f
+    /** Filled arrow head with its tip at (x, y) + 2.6 * direction. */
+    private fun head(c: Canvas, x: Float, y: Float, dx: Float, dy: Float) {
+        val px = -dy
+        val py = dx
         fill()
         val t = Path()
-        t.moveTo(ex + dx * 2.6f, ey + dy * 2.6f)
-        t.lineTo(ex + px * 2.6f, ey + py * 2.6f)
-        t.lineTo(ex - px * 2.6f, ey - py * 2.6f)
+        t.moveTo(x + dx * 3f, y + dy * 3f)
+        t.lineTo(x + px * 2.8f, y + py * 2.8f)
+        t.lineTo(x - px * 2.8f, y - py * 2.8f)
         t.close()
         c.drawPath(t, p)
         stroke()
+    }
+
+    /** Circular arrow of the 10-second skip icons (clockwise, arrow head at the top). */
+    private fun skip(c: Canvas) {
+        stroke()
+        c.drawArc(RectF(2.5f, 3.5f, 21.5f, 22.5f), -60f, 300f, false, p)
+        val ex = 12f + 9.5f * cos(Math.toRadians(240.0)).toFloat()
+        val ey = 13f + 9.5f * sin(Math.toRadians(240.0)).toFloat()
+        head(c, ex, ey, 0.866f, -0.5f)
     }
 
     private fun label(c: Canvas, text: String, baseline: Float, size: Float) {
