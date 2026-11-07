@@ -75,6 +75,88 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- "Open with": every format Flit opens itself (viewers, players, extraction). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="image/jpeg" />
+                <data android:mimeType="image/png" />
+                <data android:mimeType="image/webp" />
+                <data android:mimeType="image/gif" />
+                <data android:mimeType="image/bmp" />
+                <data android:mimeType="image/x-ms-bmp" />
+                <data android:mimeType="image/heic" />
+                <data android:mimeType="image/heif" />
+                <data android:mimeType="image/avif" />
+                <data android:mimeType="image/svg+xml" />
+                <data android:mimeType="video/mp4" />
+                <data android:mimeType="video/3gpp" />
+                <data android:mimeType="video/3gpp2" />
+                <data android:mimeType="video/webm" />
+                <data android:mimeType="video/x-matroska" />
+                <data android:mimeType="video/quicktime" />
+                <data android:mimeType="video/mpeg" />
+                <data android:mimeType="video/mp2t" />
+                <data android:mimeType="video/mp2ts" />
+                <data android:mimeType="audio/mpeg" />
+                <data android:mimeType="audio/mp3" />
+                <data android:mimeType="audio/mp4" />
+                <data android:mimeType="audio/aac" />
+                <data android:mimeType="audio/x-aac" />
+                <data android:mimeType="audio/x-wav" />
+                <data android:mimeType="audio/wav" />
+                <data android:mimeType="audio/flac" />
+                <data android:mimeType="audio/x-flac" />
+                <data android:mimeType="audio/ogg" />
+                <data android:mimeType="audio/opus" />
+                <data android:mimeType="audio/amr" />
+                <data android:mimeType="audio/3gpp" />
+                <data android:mimeType="audio/x-matroska" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="text/markdown" />
+                <data android:mimeType="text/x-markdown" />
+                <data android:mimeType="text/html" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/x-7z-compressed" />
+                <data android:mimeType="application/x-rar-compressed" />
+                <data android:mimeType="application/vnd.rar" />
+                <data android:mimeType="application/x-rar" />
+            </intent-filter>
+
+            <!-- "Open with" for files whose type the other app does not name: match by extension. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.md" />
+                <data android:pathPattern=".*\\.markdown" />
+                <data android:pathPattern=".*\\.mkv" />
+                <data android:pathPattern=".*\\.7z" />
+                <data android:pathPattern=".*\\.rar" />
+                <data android:pathPattern=".*\\.flac" />
+                <data android:pathPattern=".*\\.opus" />
+                <data android:pathPattern=".*\\.heic" />
+                <data android:pathPattern=".*\\.avif" />
+                <data android:pathPattern=".*\\.m4a" />
+                <data android:pathPattern=".*\\.mp3" />
+                <data android:pathPattern=".*\\.txt" />
+            </intent-filter>
+
+            <!-- "Share": send one or several files with Flit. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
 
         <!-- Keeps Receiver mode and running transfers alive in the background. -->
