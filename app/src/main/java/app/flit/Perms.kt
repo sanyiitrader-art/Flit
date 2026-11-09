@@ -216,8 +216,10 @@ object Perms {
         }
         if (!wifiOn() && !wifiSkipped) {
             waiting = W_WIFI
-            val i = if (Build.VERSION.SDK_INT >= 29) Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
-            else Intent(Settings.ACTION_WIFI_SETTINGS)
+            // The Wi-Fi-only panel (just the Wi-Fi switch). Settings.Panel.ACTION_WIFI exists from Android 11;
+            // the same action string is tried on Android 10. Only if Settings does not know it, fall back
+            // to the combined internet panel (10) or the Wi-Fi settings page (9).
+            val i = wifiIntent(a)
             if (!launch(a, i)) {
                 wifiSkipped = true
                 gateStep(a)
@@ -229,6 +231,15 @@ object Perms {
         val r = gateReady
         cancel()
         if (allOn) r?.invoke()
+    }
+
+    private fun wifiIntent(a: Activity): Intent {
+        if (Build.VERSION.SDK_INT >= 29) {
+            val p = Intent("android.settings.panel.action.WIFI")
+            if (p.resolveActivity(a.packageManager) != null) return p
+            return Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
+        }
+        return Intent(Settings.ACTION_WIFI_SETTINGS)
     }
 
     private fun cancel() {
