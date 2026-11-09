@@ -299,6 +299,16 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener, Live {
                 val p = h.bindingAdapterPosition
                 if (p != RecyclerView.NO_POSITION && p < entries.size) checkTap(entries[p])
             }
+            row.setOnLongClickListener {
+                val p = h.bindingAdapterPosition
+                if (p != RecyclerView.NO_POSITION && p < entries.size) FileInfo.show(context, entries[p].path)
+                true
+            }
+            row.hit.setOnLongClickListener {
+                val p = h.bindingAdapterPosition
+                if (p != RecyclerView.NO_POSITION && p < entries.size) FileInfo.show(context, entries[p].path)
+                true
+            }
             return h
         }
 
@@ -318,6 +328,7 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener, Live {
             } else {
                 // A file's icon / thumbnail opens it (built-in viewer or Android's "Open with").
                 r.icon.setOnClickListener { Open.file(context, e.path) }
+                r.icon.setOnLongClickListener { FileInfo.show(context, e.path); true }
                 r.alpha = 1f
                 r.sub.text = Types.size(e.size)
                 r.sub.visibility = View.VISIBLE
