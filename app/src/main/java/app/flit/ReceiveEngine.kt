@@ -687,6 +687,7 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
         var failed = 0
         val now = System.currentTimeMillis()
         val from = peer.name
+        peer.avatar?.let { av -> Files.pool.execute { PeerAvatars.save(from, av) } }
         for (row in rows) {
             val s = row.state()
             if (s == RecvFile.DONE) done++ else if (s == RecvFile.FAILED) failed++
