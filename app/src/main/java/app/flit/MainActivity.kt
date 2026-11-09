@@ -44,6 +44,10 @@ class MainActivity : Activity(), Xfer.Hook {
     private lateinit var mini: MiniPlayer
     private lateinit var root: FrameLayout
     private var viewer = false
+
+    /** Opened by "Open with" / "Share" from another app: leaving it goes back to that app. */
+    private var externalFlow = false
+    private var coldExternal = false
     private val stack = ArrayList<Screen>()
 
     private val rxStart = HashMap<RxSession, Long>()
@@ -58,6 +62,8 @@ class MainActivity : Activity(), Xfer.Hook {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Ui.load(this)
+        coldExternal = savedInstanceState == null &&
+            (intent?.action == Intent.ACTION_VIEW || intent?.action == Intent.ACTION_SEND || intent?.action == Intent.ACTION_SEND_MULTIPLE)
         edgeToEdge()
         Xfer.ensure()
         Xfer.hook = this
@@ -171,7 +177,31 @@ class MainActivity : Activity(), Xfer.Hook {
 
     fun top(): Screen? = stack.lastOrNull()
 
+    private fun externalOk(s: Screen): Boolean =
+        s is ImageScreen || s is CropScreen || s is VideoScreen || s is AudioScreen || s is PdfScreen ||
+            s is TextScreen || s is HtmlScreen || s is DiscoveryScreen || s is TransferScreen
+
+    /** The screens opened from another app are gone: go back to that app instead of showing Flit's home. */
+    private fun afterPop() {
+        if (externalFlow && stack.size <= 1) {
+            FlitApp.main.post {
+                if (externalFlow && stack.size <= 1 && !isFinishing) leaveExternal()
+            }
+        }
+    }
+
+    private fun leaveExternal() {
+        externalFlow = false
+        if (coldExternal) {
+            coldExternal = false
+            finishAndRemoveTask()
+        } else {
+            moveTaskToBack(true)
+        }
+    }
+
     fun push(s: Screen) {
+        if (externalFlow && !externalOk(s)) externalFlow = false
         stack.lastOrNull()?.visibility = View.GONE
         stack.add(s)
         container.addView(s, FrameLayout.LayoutParams(Ui.MATCH, Ui.MATCH))
@@ -188,6 +218,7 @@ class MainActivity : Activity(), Xfer.Hook {
         top.visibility = View.VISIBLE
         syncBubble()
         top.onShow()
+        afterPop()
     }
 
     private fun removeScreen(s: Screen) {
@@ -200,6 +231,7 @@ class MainActivity : Activity(), Xfer.Hook {
         stack.removeAt(i)
         container.removeView(s)
         s.onDestroyed()
+        afterPop()
     }
 
     /** The floating avatar is hidden on the Receiver, transfer and completed screens. */
@@ -252,12 +284,18 @@ class MainActivity : Activity(), Xfer.Hook {
                 val uri = i.data
                 val type = i.type
                 i.action = Intent.ACTION_MAIN // handled once
-                if (uri != null) openViewed(uri, type)
+                if (uri != null) {
+                    externalFlow = true
+                    openViewed(uri, type)
+                }
             } else if (what == Intent.ACTION_SEND || what == Intent.ACTION_SEND_MULTIPLE) {
                 val uris = Uris.streams(i)
                 val type = i.type
                 i.action = Intent.ACTION_MAIN
-                if (uris.isNotEmpty()) openShared(uris, type)
+                if (uris.isNotEmpty()) {
+                    externalFlow = true
+                    openShared(uris, type)
+                }
             }
         }
         if (i?.getBooleanExtra(BgService.EXTRA_EXTRACT, false) == true) {
@@ -294,7 +332,10 @@ class MainActivity : Activity(), Xfer.Hook {
         }
     }
 
-    /** Android's "Share" chose Flit: open the Sender with the shared files selected and shown. */
+    /**
+     * Android's "Share" chose Flit: the shared files become the selection and Flit goes straight to the
+     * screen that looks for receiving phones. Location and Wi-Fi are asked for first if either is off.
+     */
     private fun openShared(uris: List<android.net.Uri>, type: String?) {
         val app = applicationContext
         Files.pool.execute {
@@ -302,11 +343,15 @@ class MainActivity : Activity(), Xfer.Hook {
             FlitApp.main.post {
                 if (isFinishing || isDestroyed) return@post
                 if (files.isEmpty()) {
+                    externalFlow = false
                     Ui.toast(this, R.string.v_open_failed)
                     return@post
                 }
-                val s = (stack.lastOrNull() as? SenderScreen) ?: SenderScreen(this).also { push(it) }
-                s.showShared(files)
+                Sel.clear()
+                for (f in files) {
+                    Sel.toggle(Item(Sel.fileKey(f.path), f.name, f.length(), f.path, Types.typeOf(f.name)))
+                }
+                Xfer.startSend(this)
             }
         }
     }
