@@ -59,6 +59,7 @@ class ZoomImage(c: Context) : View(c) {
                 zoom = target
                 clamp()
                 invalidate()
+                parent?.requestDisallowInterceptTouchEvent(zoom > 1.01f)
             }
             return true
         }
@@ -164,6 +165,10 @@ class ZoomImage(c: Context) : View(c) {
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (drawable == null) return false
+        if (e.actionMasked == MotionEvent.ACTION_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+            // Zoomed in (or pinching): one finger pans the picture; otherwise the pager may swipe sideways.
+            parent?.requestDisallowInterceptTouchEvent(zoom > 1.01f || e.pointerCount > 1)
+        }
         val t = vt ?: VelocityTracker.obtain().also { vt = it }
         t.addMovement(e)
         scaleDet.onTouchEvent(e)
