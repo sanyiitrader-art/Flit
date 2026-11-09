@@ -19,6 +19,8 @@ import java.io.File
  * button that removes only that entry. Entries cannot be selected or deleted otherwise.
  * A split-APK app is ONE entry; its Install button installs the main APK together with its
  * split parts (when they sit beside it), through Android's own installer.
+ * A long press on an entry shows its details, including who the file was exchanged with, when, and how
+ * much was transferred.
  *
  * Live updates: while the tab is on screen it re-checks the files when MediaStore reports a change,
  * when an app is installed or removed (INSTALLED badge), and when anything changes inside
@@ -189,6 +191,14 @@ class HistoryTab(c: Context) : LinearLayout(c), Live {
             r.reset()
             r.title.text = e.name
             r.sub.text = Types.size(e.size)
+
+            // Long press (on the card or its picture): details of the file and of the transfer.
+            val details = View.OnLongClickListener {
+                FileInfo.show(context, e.path, e)
+                true
+            }
+            r.setOnLongClickListener(details)
+            r.thumbBox.setOnLongClickListener(details)
 
             val ext = Types.ext(e.name)
             val exists = row.exists
