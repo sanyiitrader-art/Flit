@@ -638,6 +638,7 @@ object SendEngine {
         var connFail = false
         for (s in r.sessions) {
             if (s.accepted) accepted = true
+            if (s.accepted) s.peer?.avatar?.let { av -> val nm = s.name; Files.pool.execute { PeerAvatars.save(nm, av) } }
             if (s.state == TxSession.LOST) lost = true
             if (s.state == TxSession.FAILED && !s.accepted) connFail = true
             if (s.prepared && s.accepted) {
