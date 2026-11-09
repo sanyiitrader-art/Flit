@@ -336,11 +336,20 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
             if (v is ImageCell) {
                 v.hit.setOnClickListener { toggle(h) } // checkbox corner selects
                 v.img.setOnClickListener { open(h) } // the picture opens the viewer
+                v.img.setOnLongClickListener { details(h); true }
+                v.hit.setOnLongClickListener { details(h); true }
             } else {
                 v.setOnClickListener { toggle(h) } // rest of the card selects
                 (v as RowView).thumbBox.setOnClickListener { open(h) } // thumbnail opens the player
+                v.setOnLongClickListener { details(h); true }
+                v.thumbBox.setOnLongClickListener { details(h); true }
             }
             return h
+        }
+
+        private fun details(h: VH) {
+            val p = h.bindingAdapterPosition
+            if (p != RecyclerView.NO_POSITION && p < data.size) FileInfo.show(context, data[p].path)
         }
 
         private fun open(h: VH) {
