@@ -236,6 +236,28 @@ object Dialogs {
         return ExtractDialog(d, cur, pct, bar)
     }
 
+    /** Details dialog: title, a scrollable body (at most about half the screen) and one Ok button at the bottom-right. */
+    fun details(a: Activity, title: String, body: View) {
+        val (d, col) = frame(a, title, true)
+        val t = col.getChildAt(0) as TextView
+        t.maxLines = 2
+        t.ellipsize = android.text.TextUtils.TruncateAt.END
+        val cap = (a.resources.displayMetrics.heightPixels * 0.55f).toInt()
+        val sv = object : android.widget.ScrollView(a) {
+            override fun onMeasure(w: Int, h: Int) {
+                super.onMeasure(w, MeasureSpec.makeMeasureSpec(cap, MeasureSpec.AT_MOST))
+            }
+        }
+        sv.addView(body)
+        col.addView(sv, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(8) })
+        val row = LinearLayout(a)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.addView(View(a), Ui.lin(0, 1, 1f))
+        row.addView(pill(a, d, a.getString(R.string.v_ok), true, null), Ui.lin(Ui.WRAP, Ui.WRAP))
+        col.addView(row, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.topMargin = Ui.dp(16) })
+        present(a, d)
+    }
+
     /** Red used for the Delete button and the Delete confirmation. */
     const val RED = 0xFFC0392B.toInt()
 
