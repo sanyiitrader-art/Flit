@@ -206,13 +206,13 @@ object FileInfo {
             if (ex > 0.0) add(ops, c, R.string.fi_exposure, if (ex < 1.0) "1/${Math.round(1.0 / ex)} s" else String.format(Locale.US, "%.1f s", ex))
             val fn = e.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0.0)
             if (fn > 0.0) add(ops, c, R.string.fi_aperture, String.format(Locale.US, "f/%.1f", fn))
-            val iso = e.getAttributeInt(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, 0)
+            val iso = e.getAttributeInt("ISOSpeedRatings", 0)
             if (iso > 0) add(ops, c, R.string.fi_iso, iso.toString())
             val fl = e.getAttributeDouble(ExifInterface.TAG_FOCAL_LENGTH, 0.0)
             if (fl > 0.0) add(ops, c, R.string.fi_focal, String.format(Locale.US, "%.1f mm", fl))
             add(ops, c, R.string.fi_software, e.getAttribute(ExifInterface.TAG_SOFTWARE))
-            val ll = e.latLong
-            if (ll != null) add(ops, c, R.string.fi_gps, String.format(Locale.US, "%.5f, %.5f", ll[0], ll[1]))
+            val ll = FloatArray(2)
+            if (e.getLatLong(ll)) add(ops, c, R.string.fi_gps, String.format(Locale.US, "%.5f, %.5f", ll[0], ll[1]))
         } catch (e: Exception) {
         }
     }
