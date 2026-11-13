@@ -18,6 +18,10 @@ import androidx.recyclerview.widget.RecyclerView
 /** Section header. Collapsible headers show a chevron that turns down when expanded. */
 class HeaderCell(c: Context) : LinearLayout(c) {
 
+    init {
+        setBackgroundColor(Ui.cSurface2) // a little grey, so the sheet is visible
+    }
+
     val title = Ui.label(c, "", 13f, Ui.cText2, true)
     val chev = ImageView(c)
 
@@ -118,6 +122,9 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener, Live {
     private var gen = 0
     private var pendingInstall: String? = null
     private val px: Int by lazy { Ui.dp(56) }
+    private val header = TabHeader(c, true, false)
+    private var query = ""
+    private var sortMode = 0
 
     init {
         val lm = GridLayoutManager(c, 4)
@@ -131,6 +138,25 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener, Live {
         rv.clipToPadding = false
         rv.setPadding(Ui.dp(8), Ui.dp(4), Ui.dp(8), Ui.dp(96))
         addView(rv, LayoutParams(Ui.MATCH, Ui.MATCH))
+        header.attach(rv)
+        header.setTitle(c.getString(R.string.t_apps))
+        header.host = object : TabHeader.Host {
+            override fun onQuery(q: String) {
+                query = q
+                rebuild()
+            }
+
+            override fun onSort(mode: Int) {
+                sortMode = mode
+                rebuild()
+            }
+
+            override fun onSelectAll() {
+                val items = allItems()
+                Sel.setMany(items, !Sel.allSelected(items))
+            }
+        }
+        addView(header, LayoutParams(Ui.MATCH, Ui.WRAP, Gravity.TOP))
     }
 
     /** Called by the Sender screen whenever this tab becomes visible. */
@@ -214,23 +240,49 @@ class AppsTab(c: Context) : FrameLayout(c), Sel.Listener, Live {
         }
     }
 
+    private fun sortApps(l: List<AppEntry>): List<AppEntry> = when (sortMode) {
+        TabHeader.SORT_OLD -> l.sortedBy { it.time }
+        TabHeader.SORT_SIZE -> l.sortedByDescending { it.size }
+        TabHeader.SORT_NAME -> l.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+        else -> l.sortedByDescending { it.time }
+    }
+
+    private fun sortApks(l: List<ApkFile>): List<ApkFile> = when (sortMode) {
+        TabHeader.SORT_OLD -> l.sortedBy { it.time }
+        TabHeader.SORT_SIZE -> l.sortedByDescending { it.size }
+        TabHeader.SORT_NAME -> l.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+        else -> l.sortedByDescending { it.time }
+    }
+
+    /** Everything the list shows right now that can be selected (system apps only while they are listed). */
+    private fun allItems(): List<Item> = rows.mapNotNull { r -> r.app?.item() ?: r.apk?.item() }
+
+    private fun updateCheck() {
+        header.check.checked = Sel.allSelected(allItems())
+    }
+
     private fun rebuild() {
+        val q = query.trim().lowercase()
         val sys = systems
-        val l = ArrayList<Row>(users.size + apks.size + (sys?.size ?: 0) + 2)
-        for (a in users) l.add(Row(APP, app = a))
-        if (apks.isNotEmpty()) {
+        val u = sortApps(users.filter { q.isEmpty() || it.label.lowercase().contains(q) })
+        val a = sortApks(apks.filter { q.isEmpty() || it.name.lowercase().contains(q) })
+        val l = ArrayList<Row>(u.size + a.size + (sys?.size ?: 0) + 2)
+        for (x in u) l.add(Row(APP, app = x))
+        if (a.isNotEmpty()) {
             l.add(Row(HEADER, title = context.getString(R.string.apps_apk_files)))
-            for (f in apks) l.add(Row(APK, apk = f))
+            for (f in a) l.add(Row(APK, apk = f))
         }
         if (systemRaw.isNotEmpty()) {
             l.add(Row(HEADER, title = context.getString(R.string.apps_system), expandable = true))
-            if (showSystem && sys != null) for (a in sys) l.add(Row(APP, app = a))
+            if (showSystem && sys != null) for (x in sortApps(sys.filter { q.isEmpty() || it.label.lowercase().contains(q) })) l.add(Row(APP, app = x))
         }
         rows = l
         adapter.notifyDataSetChanged()
+        updateCheck()
     }
 
     override fun onChanged() {
+        updateCheck()
         if (rows.isNotEmpty()) adapter.notifyItemRangeChanged(0, rows.size, PAY)
     }
 
