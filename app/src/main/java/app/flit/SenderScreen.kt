@@ -82,6 +82,7 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener, Live {
     private val pages: List<View> = listOf(history, apps, images, videos, audios, storage)
 
     private val summary = Ui.label(act, "", 15f, Ui.cText, true, 1)
+    private val free = Ui.label(act, "", 15f, Ui.cText2, false, 1)
     private val bar = BarView(act)
     private val tabViews = ArrayList<View>()
     private val indicator = Indicator(act)
@@ -106,7 +107,11 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener, Live {
         )
         val info = LinearLayout(act)
         info.orientation = LinearLayout.VERTICAL
-        info.addView(summary, Ui.lin(Ui.MATCH, Ui.WRAP))
+        val sumRow = LinearLayout(act)
+        sumRow.orientation = LinearLayout.HORIZONTAL
+        sumRow.addView(summary, Ui.lin(0, Ui.WRAP, 1f))
+        sumRow.addView(free, Ui.lin(Ui.WRAP, Ui.WRAP))
+        info.addView(sumRow, Ui.lin(Ui.MATCH, Ui.WRAP))
         info.addView(bar, Ui.lin(Ui.MATCH, Ui.dp(6)).also { it.topMargin = Ui.dp(6) })
         top.addView(info, Ui.lin(0, Ui.WRAP, 1f).also {
             it.leftMargin = Ui.dp(4)
@@ -283,6 +288,7 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener, Live {
         if (total <= 0L) return
         val pr = Types.storagePair(used, total)
         summary.text = act.getString(R.string.storage_summary, pr.first, pr.second)
+        free.text = Types.size((total - used).coerceAtLeast(0L))
         bar.progress = used.toFloat() / total.toFloat()
     }
 
@@ -321,30 +327,6 @@ class SenderScreen(act: MainActivity) : Screen(act), Sel.Listener, Live {
     override fun onShow() {
         updateStorage()
         showPage(pager.currentItem)
-    }
-
-    /**
-     * Share With: selects the shared files (never twice, never deselecting), opens the tab that fits
-     * the first file (Images, Videos, Audios, otherwise Internal storage in its folder) and scrolls to it.
-     */
-    fun showShared(files: List<File>) {
-        if (files.isEmpty()) return
-        val items = files.map { Item(Sel.fileKey(it.path), it.name, it.length(), it.path, Types.typeOf(it.name)) }
-        for (it in items) if (!Sel.has(it.key)) Sel.toggle(it)
-        val first = items[0]
-        val tab = when (first.type) {
-            Types.IMAGE -> 2
-            Types.VIDEO -> 3
-            Types.AUDIO -> 4
-            else -> 5
-        }
-        pager.setCurrentItem(tab, false)
-        when (tab) {
-            2 -> images.reveal(first.path)
-            3 -> videos.reveal(first.path)
-            4 -> audios.reveal(first.path)
-            else -> storage.reveal(first.path)
-        }
     }
 
     override fun onBack(): Boolean = pager.currentItem == 5 && storage.up()
