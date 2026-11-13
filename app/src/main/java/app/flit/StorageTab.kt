@@ -45,6 +45,10 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener, Live {
     private val notice = Notice(c)
     private val adapter = Ad()
     private val px: Int by lazy { Ui.dp(44) }
+    private val header = TabHeader(c, false, true)
+    private var query = ""
+    private var searching = false
+    private var searchGen = 0
 
     init {
         orientation = VERTICAL
@@ -57,7 +61,10 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener, Live {
         path.ellipsize = TextUtils.TruncateAt.START
         head.addView(up, Ui.lin(Ui.dp(44), Ui.dp(44)))
         head.addView(path, Ui.lin(0, Ui.WRAP, 1f))
-        addView(head, Ui.lin(Ui.MATCH, Ui.dp(44)))
+        // The up arrow and the folder name now live on the header's sheet, after its select-all box.
+        head.removeAllViews()
+        header.sheet.addView(up, Ui.lin(Ui.dp(44), Ui.dp(44)))
+        header.sheet.addView(path, Ui.lin(0, Ui.WRAP, 1f))
 
         val body = FrameLayout(c)
         rv.layoutManager = LinearLayoutManager(c)
@@ -66,10 +73,72 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener, Live {
         rv.clipToPadding = false
         rv.setPadding(0, Ui.dp(4), 0, Ui.dp(96))
         body.addView(rv, FrameLayout.LayoutParams(Ui.MATCH, Ui.MATCH))
+        header.attach(rv)
+        header.host = object : TabHeader.Host {
+            override fun onQuery(q: String) {
+                applyQuery(q)
+            }
+
+            override fun onSort(mode: Int) {}
+
+            override fun onSelectAll() {
+                val items = fileItems()
+                Sel.setMany(items, !Sel.allSelected(items))
+            }
+        }
+        body.addView(header, FrameLayout.LayoutParams(Ui.MATCH, Ui.WRAP, Gravity.TOP))
         body.addView(notice, FrameLayout.LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.CENTER))
         addView(body, Ui.lin(Ui.MATCH, 0, 1f))
 
         updateHeader()
+    }
+
+    /** The files (not folders) the list shows now, as selectable items. */
+    private fun fileItems(): List<Item> =
+        entries.filter { !it.dir }.map { Item(Sel.fileKey(it.path), it.name, it.size, it.path, Types.typeOf(it.name)) }
+
+    private fun updateCheck() {
+        header.check.checked = Sel.allSelected(fileItems())
+    }
+
+    /** Search box: with text, lists the files below the current folder whose name contains it; empty, the normal listing. */
+    private fun applyQuery(q: String) {
+        query = q.trim()
+        val g = ++searchGen
+        if (query.isEmpty()) {
+            searching = false
+            load(false)
+            return
+        }
+        searching = true
+        val root = cur
+        val needle = query.lowercase()
+        Files.pool.execute {
+            val out = ArrayList<Entry>()
+            val stack = ArrayList<File>()
+            stack.add(root)
+            while (stack.isNotEmpty() && out.size < 1000 && g == searchGen) {
+                val d = stack.removeAt(stack.size - 1)
+                if (Files.isRestricted(d)) continue
+                val kids = d.listFiles() ?: continue
+                for (f in kids) {
+                    if (f.name.startsWith(".")) continue
+                    if (f.isDirectory) {
+                        if (!java.nio.file.Files.isSymbolicLink(f.toPath())) stack.add(f)
+                    } else if (f.name.lowercase().contains(needle)) {
+                        out.add(Entry(f.name, f.path, false, f.length(), false, f.lastModified()))
+                    }
+                }
+            }
+            out.sortByDescending { it.time }
+            FlitApp.main.post {
+                if (g == searchGen && searching) {
+                    entries = out
+                    adapter.notifyDataSetChanged()
+                    updateCheck()
+                }
+            }
+        }
     }
 
     /** Share With: opens the folder that contains [path] and scrolls to the file. */
@@ -195,6 +264,7 @@ class StorageTab(c: Context) : LinearLayout(c), Sel.Listener, Live {
     }
 
     override fun onChanged() {
+        updateCheck()
         if (entries.isNotEmpty()) adapter.notifyItemRangeChanged(0, entries.size, PAY)
     }
 
