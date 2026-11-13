@@ -69,6 +69,15 @@ object Sel {
         if (removeSilently(key)) notifyChanged()
     }
 
+    /** True when [items] is not empty and every one of them is selected. */
+    fun allSelected(items: List<Item>): Boolean = items.isNotEmpty() && items.all { has(it.key) }
+
+    /** Selects (or deselects) all [items] with one notification. */
+    fun setMany(items: List<Item>, on: Boolean) {
+        for (i in items) if (on) addSilently(i) else removeSilently(i.key)
+        notifyChanged()
+    }
+
     fun clear() {
         if (map.isEmpty() && folders.isEmpty()) return
         map.clear()
