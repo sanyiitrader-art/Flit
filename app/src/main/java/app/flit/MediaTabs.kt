@@ -184,6 +184,10 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
     private var loadedAt = 0L
     private var loadedVer = -1
     private var pendingReveal: String? = null
+    private var shown: List<Media> = emptyList()
+    private var query = ""
+    private var sortMode = 0
+    private val header = TabHeader(c, true, false)
     private val px: Int by lazy { Ui.dp(if (kind == Types.IMAGE) 120 else 96) }
 
     init {
@@ -194,6 +198,25 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
         rv.setPadding(if (kind == Types.IMAGE) Ui.dp(1) else 0, Ui.dp(4), if (kind == Types.IMAGE) Ui.dp(1) else 0, Ui.dp(96))
         addView(rv, LayoutParams(Ui.MATCH, Ui.MATCH))
         addView(notice, LayoutParams(Ui.WRAP, Ui.WRAP, Gravity.CENTER))
+        header.attach(rv)
+        header.setTitle(c.getString(when (kind) { Types.IMAGE -> R.string.t_images; Types.VIDEO -> R.string.t_videos; else -> R.string.t_audios }))
+        header.host = object : TabHeader.Host {
+            override fun onQuery(q: String) {
+                query = q
+                refilter()
+            }
+
+            override fun onSort(mode: Int) {
+                sortMode = mode
+                refilter()
+            }
+
+            override fun onSelectAll() {
+                val items = shown.map { it.item() }
+                Sel.setMany(items, !Sel.allSelected(items))
+            }
+        }
+        addView(header, LayoutParams(Ui.MATCH, Ui.WRAP, Gravity.TOP))
     }
 
     /** Called by the Sender screen whenever this tab becomes visible (or access may have changed). */
@@ -206,7 +229,7 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
             staging = null
             if (data.isNotEmpty()) {
                 data = ArrayList()
-                adapter.notifyDataSetChanged()
+                refilter()
             }
             notice.set(
                 context.getString(R.string.perm_files_needed),
@@ -229,7 +252,7 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
 
     private fun tryReveal() {
         val p = pendingReveal ?: return
-        val i = data.indexOfFirst { it.path == p }
+        val i = shown.indexOfFirst { it.path == p }
         if (i < 0) return
         pendingReveal = null
         rv.post {
@@ -264,10 +287,10 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
                     if (st != null) {
                         staging = null
                         data = st
-                        adapter.notifyDataSetChanged()
+                        refilter()
                     } else if (firstPending) { // the query returned nothing: replace any older rows
                         data = ArrayList()
-                        adapter.notifyDataSetChanged()
+                        refilter()
                     }
                     firstPending = false
                     loading = false
@@ -294,22 +317,43 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
         if (firstPending) {
             firstPending = false
             data = ArrayList(chunk)
-            adapter.notifyDataSetChanged()
+            refilter()
             notice.hide()
         } else {
             val start = data.size
             data.addAll(chunk)
-            adapter.notifyItemRangeInserted(start, chunk.size)
+            refilter()
         }
         tryReveal()
     }
 
+    /** What the list shows: the loaded items, filtered by the search box and ordered by the sort choice. */
+    private fun refilter() {
+        val q = query.trim().lowercase()
+        var l: List<Media> = if (q.isEmpty()) data else data.filter { it.name.lowercase().contains(q) }
+        l = when (sortMode) {
+            TabHeader.SORT_OLD -> l.reversed()
+            TabHeader.SORT_SIZE -> l.sortedByDescending { it.size }
+            TabHeader.SORT_NAME -> l.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+            else -> l
+        }
+        shown = l
+        adapter.notifyDataSetChanged()
+        updateCheck()
+        updateNotice()
+    }
+
+    private fun updateCheck() {
+        header.check.checked = shown.isNotEmpty() && shown.all { Sel.has(it.key) }
+    }
+
     private fun updateNotice() {
-        if (loaded && data.isEmpty()) notice.set(context.getString(R.string.media_empty)) else notice.hide()
+        if (loaded && shown.isEmpty()) notice.set(context.getString(R.string.media_empty)) else notice.hide()
     }
 
     override fun onChanged() {
-        if (data.isNotEmpty()) adapter.notifyItemRangeChanged(0, data.size, PAY)
+        if (shown.isNotEmpty()) adapter.notifyItemRangeChanged(0, shown.size, PAY)
+        updateCheck()
     }
 
     override fun onAttachedToWindow() {
@@ -327,7 +371,7 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
 
     private inner class Ad : RecyclerView.Adapter<VH>() {
 
-        override fun getItemCount(): Int = data.size
+        override fun getItemCount(): Int = shown.size
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
             val v: View = if (kind == Types.IMAGE) ImageCell(context)
@@ -349,21 +393,21 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
 
         private fun details(h: VH) {
             val p = h.bindingAdapterPosition
-            if (p != RecyclerView.NO_POSITION && p < data.size) FileInfo.show(context, data[p].path)
+            if (p != RecyclerView.NO_POSITION && p < shown.size) FileInfo.show(context, shown[p].path)
         }
 
         private fun open(h: VH) {
             val p = h.bindingAdapterPosition
-            if (p != RecyclerView.NO_POSITION && p < data.size) Open.file(context, data[p].path)
+            if (p != RecyclerView.NO_POSITION && p < shown.size) Open.file(context, shown[p].path)
         }
 
         private fun toggle(h: VH) {
             val p = h.bindingAdapterPosition
-            if (p != RecyclerView.NO_POSITION && p < data.size) Sel.toggle(data[p].item())
+            if (p != RecyclerView.NO_POSITION && p < shown.size) Sel.toggle(shown[p].item())
         }
 
         override fun onBindViewHolder(h: VH, position: Int) {
-            val m = data[position]
+            val m = shown[position]
             val v = h.v
             if (v is ImageCell) {
                 Thumbs.load(v.img, "i:${m.path}:$px", v.ph, 36) { Thumbs.image(m.path, m.uri, px) }
@@ -393,7 +437,7 @@ class MediaTab(c: Context, private val kind: Int) : FrameLayout(c), Sel.Listener
                 super.onBindViewHolder(h, position, payloads)
                 return
             }
-            val sel = Sel.has(data[position].key)
+            val sel = Sel.has(shown[position].key)
             val v = h.v
             if (v is ImageCell) v.check.checked = sel else (v as RowView).check.checked = sel
         }
