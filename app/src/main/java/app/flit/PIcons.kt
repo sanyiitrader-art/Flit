@@ -48,6 +48,7 @@ object PIcons {
     const val ROTATE = 16
     const val HEADSET = 17
     const val SQUARE = 18
+    const val SORT = 19
 
     fun get(kind: Int, color: Int = Color.WHITE): PIcon = PIcon(kind, color)
 }
@@ -186,6 +187,11 @@ class PIcon(private val kind: Int, color: Int) : Drawable() {
                 fill()
                 c.drawRoundRect(RectF(3.5f, 11.5f, 8f, 19.5f), 2f, 2f, p)
                 c.drawRoundRect(RectF(16f, 11.5f, 20.5f, 19.5f), 2f, 2f, p)
+            }
+            PIcons.SORT -> {
+                c.drawLine(4f, 7f, 20f, 7f, p)
+                c.drawLine(4f, 12f, 15f, 12f, p)
+                c.drawLine(4f, 17f, 10f, 17f, p)
             }
             PIcons.SQUARE -> {
                 c.drawRoundRect(RectF(5f, 5f, 19f, 19f), 3f, 3f, p)
