@@ -437,6 +437,7 @@ class MainActivity : Activity(), Xfer.Hook {
     override fun onResume() {
         super.onResume()
         Perms.onResume(this)
+        Installer.resume(this)
         stack.lastOrNull()?.onShow()
     }
 
