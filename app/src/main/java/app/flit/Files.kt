@@ -57,7 +57,8 @@ class AppEntry(
     val system: Boolean,
     val path: String,
     val splits: List<String>,
-    val size: Long
+    val size: Long,
+    val time: Long = 0L
 ) {
     private fun fileName(): String = label.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().ifEmpty { pkg } + ".apk"
     fun item(): Item = Item(Sel.appKey(pkg), fileName(), size, path, Types.APK, fileName(), splits)
@@ -67,12 +68,12 @@ class AppEntry(
 class AppsFast(val users: List<AppEntry>, val systems: List<ApplicationInfo>)
 
 /** An APK file found in accessible storage. */
-class ApkFile(val path: String, val name: String, val size: Long) {
+class ApkFile(val path: String, val name: String, val size: Long, val time: Long = 0L) {
     fun item(): Item = Item(Sel.fileKey(path), name, size, path, Types.APK)
 }
 
 /** One row of the Internal storage browser. */
-class Entry(val name: String, val path: String, val dir: Boolean, val size: Long, val restricted: Boolean)
+class Entry(val name: String, val path: String, val dir: Boolean, val size: Long, val restricted: Boolean, val time: Long = 0L)
 
 /**
  * Receives the result of a split-APK install session. When Android needs the user's confirmation
@@ -292,7 +293,7 @@ object Files {
 
     private fun entryOf(pm: PackageManager, ai: ApplicationInfo, system: Boolean): AppEntry {
         val m = metaOf(pm, ai)
-        return AppEntry(ai.packageName, m.label, system, ai.sourceDir, ai.splitSourceDirs?.toList() ?: emptyList(), m.size)
+        return AppEntry(ai.packageName, m.label, system, ai.sourceDir, ai.splitSourceDirs?.toList() ?: emptyList(), m.size, File(ai.sourceDir).lastModified())
     }
 
     private fun entriesOf(pm: PackageManager, list: List<ApplicationInfo>, system: Boolean): List<AppEntry> {
@@ -379,7 +380,7 @@ object Files {
                     if (!path.endsWith(".apk", true)) continue
                     val f = File(path)
                     if (isSplitName(f.name)) continue
-                    if (f.isFile && f.length() > 0 && seen.add(path)) out.add(ApkFile(path, f.name, f.length()))
+                    if (f.isFile && f.length() > 0 && seen.add(path)) out.add(ApkFile(path, f.name, f.length(), f.lastModified()))
                 }
             }
         } catch (e: Exception) {
@@ -389,7 +390,7 @@ object Files {
             for (f in kids) {
                 if (isSplitName(f.name)) continue
                 if (f.isFile && f.name.endsWith(".apk", true) && f.length() > 0 && seen.add(f.path)) {
-                    out.add(ApkFile(f.path, f.name, f.length()))
+                    out.add(ApkFile(f.path, f.name, f.length(), f.lastModified()))
                 }
             }
         }
@@ -433,9 +434,9 @@ object Files {
             val n = f.name
             if (n.startsWith(".")) continue
             val d = f.isDirectory
-            out.add(Entry(n, f.path, d, if (d) 0L else f.length(), d && isRestricted(f)))
+            out.add(Entry(n, f.path, d, if (d) 0L else f.length(), d && isRestricted(f), f.lastModified()))
         }
-        out.sortWith(compareBy<Entry>({ !it.dir }, { it.name.lowercase() }))
+        out.sortWith(compareBy<Entry>({ !it.dir }, { -it.time }, { it.name.lowercase() })) // folders first, newest first
         return out
     }
 
@@ -467,7 +468,8 @@ object Files {
     fun open(c: Context, path: String) = Open.file(c, path)
 
     /** True when Android lets Flit hand APKs to the package installer ("Install unknown apps"). */
-    fun canInstall(c: Context): Boolean = c.packageManager.canRequestPackageInstalls()
+    /** Always true: [install] asks for "Install unknown apps" itself and carries on when it is granted. */
+    fun canInstall(c: Context): Boolean = true
 
     /**
      * The split-APK parts that belong to the main APK at [path]: sibling "split_*.apk" files in the
@@ -489,22 +491,11 @@ object Files {
      * Returns false if it could not be started.
      */
     fun install(c: Context, path: String): Boolean {
-        val splits = splitsOf(path)
-        if (splits.isNotEmpty()) {
-            installBundle(c, File(path), splits)
-            return true
-        }
-        return try {
-            val uri = FileProvider.getUriForFile(c, c.packageName + ".files", File(path))
-            val i = Intent(Intent.ACTION_VIEW)
-            i.setDataAndType(uri, APK_MIME)
-            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            if (c !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            c.startActivity(i)
-            true
-        } catch (e: Exception) {
-            false
-        }
+        if (!c.packageManager.canRequestPackageInstalls()) return Installer.askPermission(c, path)
+        // Always through Android's package installer session: it shows the system's own
+        // "Do you want to install this application?" dialog directly (no "Open with" list).
+        installBundle(c, File(path), splitsOf(path))
+        return true
     }
 
     private fun installBundle(c: Context, base: File, splits: List<File>) {
