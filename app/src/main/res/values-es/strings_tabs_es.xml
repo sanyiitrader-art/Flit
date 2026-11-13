@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="t_search">Buscar</string>
+    <string name="t_sort">Ordenar</string>
+    <string name="t_sort_new">Nuevo</string>
+    <string name="t_sort_old">Antiguo</string>
+    <string name="t_sort_size">Tamaño</string>
+    <string name="t_sort_name">Nombre</string>
+    <string name="t_images">Imágenes</string>
+    <string name="t_videos">Videos</string>
+    <string name="t_audios">Audios</string>
+    <string name="t_apps">Aplicaciones</string>
+</resources>
