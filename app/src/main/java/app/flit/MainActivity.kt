@@ -36,7 +36,10 @@ abstract class Screen(val act: MainActivity) : FrameLayout(act) {
  * the permission gate runs, and the transfer hooks of [Xfer]. Language and theme are applied in
  * attachBaseContext, so changing either simply recreates this Activity.
  */
-class MainActivity : Activity(), Xfer.Hook {
+open class MainActivity : Activity(), Xfer.Hook {
+
+    /** False in [PlayerActivity]: it only hosts the video player and owns none of the app-wide hooks. */
+    protected open val isMain: Boolean get() = true
 
     private lateinit var container: FrameLayout
     private lateinit var layer: FrameLayout
@@ -66,7 +69,7 @@ class MainActivity : Activity(), Xfer.Hook {
             (intent?.action == Intent.ACTION_VIEW || intent?.action == Intent.ACTION_SEND || intent?.action == Intent.ACTION_SEND_MULTIPLE)
         edgeToEdge()
         Xfer.ensure()
-        Xfer.hook = this
+        if (isMain) Xfer.hook = this
 
         root = FrameLayout(this)
         root.setBackgroundColor(Ui.cBg)
@@ -83,9 +86,9 @@ class MainActivity : Activity(), Xfer.Hook {
         Ui.fitSystem(root)
         setContentView(root)
 
-        Perms.onBusy = { on -> shade.visibility = if (on) View.VISIBLE else View.GONE }
+        if (isMain) Perms.onBusy = { on -> shade.visibility = if (on) View.VISIBLE else View.GONE }
 
-        Bubbles.attach(layer, { push(ReceiverScreen(this)) }, { Xfer.restore(this) })
+        if (isMain) Bubbles.attach(layer, { push(ReceiverScreen(this)) }, { Xfer.restore(this) })
 
         // In-app audio mini-player (bottom-left), shown while audio plays and a full player is not open.
         mini = MiniPlayer(this)
@@ -96,13 +99,13 @@ class MainActivity : Activity(), Xfer.Hook {
             }
         )
 
-        push(HomeScreen(this))
-        if (Prefs.flag("reopen_settings")) {
+        if (isMain) push(HomeScreen(this))
+        if (isMain && Prefs.flag("reopen_settings")) {
             Prefs.setFlag("reopen_settings", false)
             push(SettingsScreen(this))
         }
         if (savedInstanceState == null) {
-            root.post { Perms.startup(this) }
+            if (isMain) root.post { Perms.startup(this) }
             root.post { handleGo(intent) }
         }
 
@@ -210,7 +213,10 @@ class MainActivity : Activity(), Xfer.Hook {
     }
 
     fun pop() {
-        if (stack.size <= 1) return
+        if (stack.size <= 1) {
+            if (!isMain) finish() // the player's last screen: close the player
+            return
+        }
         val s = stack.removeAt(stack.size - 1)
         container.removeView(s)
         s.onDestroyed()
@@ -277,7 +283,7 @@ class MainActivity : Activity(), Xfer.Hook {
 
     // ---- Notification taps -------------------------------------------------------------
 
-    private fun handleGo(i: Intent?) {
+    protected open fun handleGo(i: Intent?) {
         if (i != null) {
             val what = i.action
             if (what == Intent.ACTION_VIEW) {
@@ -436,8 +442,10 @@ class MainActivity : Activity(), Xfer.Hook {
 
     override fun onResume() {
         super.onResume()
-        Perms.onResume(this)
-        Installer.resume(this)
+        if (isMain) {
+            Perms.onResume(this)
+            Installer.resume(this)
+        }
         stack.lastOrNull()?.onShow()
     }
 
@@ -477,8 +485,10 @@ class MainActivity : Activity(), Xfer.Hook {
 
     override fun onDestroy() {
         if (Xfer.hook === this) Xfer.hook = null
-        Perms.onBusy = null
-        Bubbles.detach(layer)
+        if (isMain) {
+            Perms.onBusy = null
+            Bubbles.detach(layer)
+        }
         super.onDestroy()
     }
 }
