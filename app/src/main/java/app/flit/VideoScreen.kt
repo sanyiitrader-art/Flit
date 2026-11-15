@@ -57,7 +57,7 @@ private object Recents {
  *  - Playlist: every video on the phone, most recently opened first. Videos Flit cannot play are
  *    listed too and open in Android's "Open with".
  */
-class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act), GestureLayer.Host {
+class VideoScreen(act: MainActivity, private var startPath: String) : Screen(act), GestureLayer.Host {
 
     /** The playable queue. Starts with the opened video and is completed when the library list arrives. */
     private var files: List<File> = listOf(File(startPath))
@@ -113,6 +113,9 @@ class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act
     private var speed = 1f
     private var aspect = 0
     private var landMode: Boolean? = null
+
+    /** True while the queue is only the files ticked in the playlist. */
+    private var restricted = false
     private var playlist: PlaylistPanel? = null
     private var speedMenu: View? = null
 
@@ -256,7 +259,7 @@ class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act
                 files.getOrNull(player.currentMediaItemIndex)?.let { Recents.touch(it.path) }
                 updateTitle()
                 updateNav()
-                if (inBg) syncBg()
+                syncBg()
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -266,12 +269,12 @@ class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act
                     bump()
                 }
                 updatePlayIcon()
-                if (inBg) syncBg()
+                syncBg()
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 updatePlayIcon()
-                if (inBg) syncBg()
+                syncBg()
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -302,6 +305,7 @@ class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act
         bump()
         post(ticker)
         loadLibrary()
+        registerSession()
     }
 
     private fun item(f: File): MediaItem = MediaItem.fromUri(Uri.fromFile(f))
@@ -395,12 +399,9 @@ class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act
             player.release()
         } catch (e: Exception) {
         }
-        if (VBg.active) {
-            VBg.active = false
-            VBg.onToggle = null
-            VBg.onClose = null
-            BgService.update()
-        }
+        VBg.clear()
+        BgService.update()
+        Picks.video.clear()
         val lpw = act.window.attributes
         lpw.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         act.window.attributes = lpw
@@ -429,30 +430,39 @@ class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act
             .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !on).build()
     }
 
+    /** Only the picture stops (video track off); the sound goes on through the background service. */
     private fun goBackground() {
         inBg = true
         setVideoTrack(false)
-        VBg.onToggle = {
-            player.playWhenReady = !player.playWhenReady
-            syncBg()
-        }
-        VBg.onClose = {
-            player.pause()
-            VBg.active = false
-            BgService.update()
-        }
-        VBg.active = true
         syncBg()
     }
 
     private fun comeBack() {
         inBg = false
         setVideoTrack(true)
-        VBg.active = false
-        VBg.onToggle = null
-        VBg.onClose = null
-        BgService.update()
         updatePlayIcon()
+    }
+
+    /**
+     * Registers the player with Android's media system for as long as a video is open: the notification
+     * panel and the lock screen then show previous / play-pause / next, the title and a seek bar.
+     */
+    private fun registerSession() {
+        VBg.onToggle = {
+            player.playWhenReady = !player.playWhenReady
+            syncBg()
+        }
+        VBg.onClose = { act.pop() }
+        VBg.onNext = { player.seekToNextMediaItem() }
+        VBg.onPrev = { player.seekToPrevious() }
+        VBg.onSeek = {
+            player.seekTo(it)
+            syncBg()
+        }
+        VBg.pos = { player.currentPosition }
+        VBg.dur = { player.duration.coerceAtLeast(0L) }
+        VBg.active = true
+        syncBg()
     }
 
     private fun syncBg() {
@@ -590,6 +600,7 @@ class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act
         var t = player.currentPosition + seconds * 1000L
         t = if (d > 0L) t.coerceIn(0L, d) else t.coerceAtLeast(0L)
         player.seekTo(t)
+        syncBg()
         if (!scrubbing) tick()
     }
 
@@ -613,6 +624,20 @@ class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act
             setBrightness((briFrac + delta).coerceIn(0f, 1f))
             briSlider.progress = briFrac
             showLabel("${(briFrac * 100f).toInt()}%")
+        }
+    }
+
+    /** Long press and hold: 2x until the finger is lifted. */
+    override fun onSpeedHold(on: Boolean) {
+        if (on) {
+            player.setPlaybackSpeed(2f)
+            removeCallbacks(hideLabel)
+            label.text = "2x \u25B6\u25B6"
+            label.visibility = VISIBLE
+        } else {
+            player.setPlaybackSpeed(speed)
+            removeCallbacks(hideLabel)
+            postDelayed(hideLabel, 250L)
         }
     }
 
@@ -721,7 +746,7 @@ class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act
     private fun applyLibrary(allFiles: List<File>, playable: List<File>) {
         if (!alive) return
         all = allFiles
-        if (player.mediaItemCount != 1) return
+        if (restricted || player.mediaItemCount != 1) return
         val curPath = files.getOrNull(player.currentMediaItemIndex)?.path ?: return
         val idx = playable.indexOfFirst { it.path == curPath }
         if (idx < 0) return
@@ -739,8 +764,9 @@ class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act
         val list = if (all.isNotEmpty()) all else files
         val curPath = files.getOrNull(player.currentMediaItemIndex)?.path
         val pl = PlaylistPanel(
-            act, list, list.indexOfFirst { it.path == curPath }.coerceAtLeast(0), true, width > height,
+            act, list, list.indexOfFirst { it.path == curPath }.coerceAtLeast(0), true, width > height, Picks.video,
             { i -> pick(list[i]) },
+            { sel -> playSelected(sel) },
             {
                 playlist = null
                 bump()
@@ -762,6 +788,39 @@ class VideoScreen(act: MainActivity, private val startPath: String) : Screen(act
             }
         }
         Open.external(act, f.path)
+    }
+
+    /** Another video was opened while this player exists (for example while it is in picture-in-picture): switch to it. */
+    fun playNew(path: String) {
+        Recents.touch(path)
+        startPath = path
+        val i = files.indexOfFirst { it.path == path }
+        if (i >= 0) {
+            player.seekTo(i, 0L)
+            player.playWhenReady = true
+            return
+        }
+        restricted = false
+        files = listOf(File(path))
+        player.setMediaItems(files.map { item(it) }, 0, 0L)
+        player.prepare()
+        player.playWhenReady = true
+        updateTitle()
+        updateNav()
+        loadLibrary()
+    }
+
+    /** Play pressed in the playlist: the queue becomes only the ticked videos (order, shuffle and repeat stay among them). */
+    private fun playSelected(sel: List<File>) {
+        val ok = sel.filter { Open.kind(it.path) == Open.K_VIDEO }
+        if (ok.isEmpty()) return
+        restricted = true
+        files = ok
+        player.setMediaItems(ok.map { item(it) }, 0, 0L)
+        player.prepare()
+        player.playWhenReady = true
+        updateTitle()
+        updateNav()
     }
 
     private fun enterPip() {
