@@ -12,6 +12,7 @@ import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import java.io.File
 import kotlin.math.min
 
 /**
@@ -36,6 +37,9 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
     private var alive = true
     private var playlist: PlaylistPanel? = null
 
+    /** Every audio file on the phone (for the playlist panel). */
+    private var all: List<File> = emptyList()
+
     private val ticker = object : Runnable {
         override fun run() {
             tick()
@@ -44,10 +48,7 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
     }
 
     init {
-        if (path != null && Audio.current?.path != path) {
-            val list = Open.siblings(path)
-            Audio.start(list, list.indexOfFirst { it.path == path }.coerceAtLeast(0))
-        }
+        if (path != null && Audio.current?.path != path) Audio.openTrack(path)
 
         spin.duration = 8000L
         spin.repeatCount = ObjectAnimator.INFINITE
@@ -118,6 +119,7 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
         }
         update()
         post(ticker)
+        loadLibrary()
     }
 
     private fun ctl(desc: String, sizeDp: Int, onClick: () -> Unit): ImageView {
@@ -198,15 +200,52 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
         }
     }
 
+    /** Reads every audio file from the media library in the background; the playable ones become the queue. */
+    private fun loadLibrary() {
+        Files.pool.execute {
+            val paths = ArrayList<String>()
+            val seen = HashSet<String>()
+            try {
+                Files.streamMedia(Types.AUDIO, { false }) { list ->
+                    for (m in list) if (seen.add(m.path)) paths.add(m.path)
+                }
+            } catch (e: Exception) {
+            }
+            Audio.current?.path?.let { if (seen.add(it)) paths.add(0, it) }
+            val allFiles = paths.map { File(it) }.filter { it.isFile }
+            val playable = allFiles.filter { Open.kind(it.path) == Open.K_AUDIO }
+            FlitApp.main.post {
+                if (!alive) return@post
+                all = allFiles
+                if (Audio.active) Audio.reorder(playable)
+            }
+        }
+    }
+
     private fun openPlaylist() {
         if (playlist != null || !Audio.active) return
+        val list = if (all.isNotEmpty()) all else Audio.files
+        val cur = Audio.current?.path
         val pl = PlaylistPanel(
-            act, Audio.files, Audio.index, false, false,
-            { i -> Audio.jump(i) },
+            act, list, list.indexOfFirst { it.path == cur }.coerceAtLeast(0), false, false, Picks.audio,
+            { i -> pick(list[i]) },
+            { sel -> Audio.playOnly(sel.filter { Open.kind(it.path) == Open.K_AUDIO }) },
             { playlist = null }
         )
         playlist = pl
         pl.open(this)
+    }
+
+    /** A row was tapped: play it here, or hand it to Android's "Open with" if Flit cannot play it. */
+    private fun pick(f: File) {
+        if (Open.kind(f.path) == Open.K_AUDIO) {
+            val i = Audio.files.indexOfFirst { it.path == f.path }
+            if (i >= 0) {
+                Audio.jump(i)
+                return
+            }
+        }
+        Open.external(act, f.path)
     }
 
     // ---- The disk ----------------------------------------------------------------------------------------
