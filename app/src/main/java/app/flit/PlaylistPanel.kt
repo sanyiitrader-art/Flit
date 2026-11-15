@@ -11,16 +11,28 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.io.File
 import kotlin.math.abs
 
 /**
- * Playlist of the video and audio players (the other files of the same type in the same folder).
- * Rows: thumbnail / artwork, file name, duration. [side] = a drawer from the right covering half
- * the width (video, landscape); otherwise a sheet from the bottom covering half the height.
- * Closes with the X, a tap outside, or a drag in the closing direction (right / down).
+ * What the user ticked in the playlists. It stays while the app lives and is emptied when the media is
+ * cleared (audio stopped, video player closed).
+ */
+object Picks {
+    val audio = LinkedHashSet<String>()
+    val video = LinkedHashSet<String>()
+}
+
+/**
+ * Playlist of the video and audio players (every file of that kind on the phone). Rows: a selection box,
+ * thumbnail / artwork, file name, duration. Tapping the box ticks the file; tapping anywhere else on the
+ * row opens it. While something is ticked, a Play button appears in the header (between the title and the
+ * X): it plays only the ticked files. [side] = a drawer from the right covering half the width (video,
+ * landscape); otherwise a sheet from the bottom covering half the height. Closes with the X, a tap
+ * outside, or a drag in the closing direction (right / down).
  */
 class PlaylistPanel(
     c: Context,
@@ -28,12 +40,15 @@ class PlaylistPanel(
     private val current: Int,
     private val video: Boolean,
     private val side: Boolean,
+    private val picks: MutableSet<String>,
     private val onPick: (Int) -> Unit,
+    private val onPlay: (List<File>) -> Unit,
     private val onClosed: () -> Unit
 ) : FrameLayout(c) {
 
     private val panel = LinearLayout(c)
     private val rv = RecyclerView(c)
+    private val play: TextView
     private val slop = ViewConfiguration.get(c).scaledTouchSlop
     private var closing = false
     private var downX = 0f
@@ -41,9 +56,9 @@ class PlaylistPanel(
     private var dragging = false
     private var vt: VelocityTracker? = null
     private val px: Int by lazy { Ui.dp(56) }
+    private val adapter = Ad()
 
     init {
-        // Scrim: a tap outside the panel closes it.
         val scrim = View(c)
         scrim.setBackgroundColor(Ui.alpha(Color.BLACK, 90))
         scrim.setOnClickListener { close() }
@@ -58,6 +73,18 @@ class PlaylistPanel(
         head.gravity = Gravity.CENTER_VERTICAL
         head.setPadding(Ui.dp(16), Ui.dp(4), Ui.dp(4), Ui.dp(4))
         head.addView(Ui.label(c, c.getString(R.string.v_playlist), 16f, Color.WHITE, true, 1), Ui.lin(0, Ui.WRAP, 1f))
+        play = Ui.label(c, c.getString(R.string.v_play_selected), 14f, Ui.cOnAccent, true, 1)
+        play.gravity = Gravity.CENTER
+        play.setPadding(Ui.dp(18), Ui.dp(8), Ui.dp(18), Ui.dp(8))
+        play.background = Ui.shape(PSlider.ACCENT, 100)
+        play.setOnClickListener {
+            val sel = files.filter { picks.contains(it.path) }
+            if (sel.isNotEmpty()) {
+                onPlay(sel)
+                close()
+            }
+        }
+        head.addView(play, Ui.lin(Ui.WRAP, Ui.WRAP).also { it.rightMargin = Ui.dp(4) })
         val x = ImageView(c)
         x.setImageDrawable(Icons.glyph(Icons.CLOSE, Color.WHITE))
         x.setPadding(Ui.dp(12), Ui.dp(12), Ui.dp(12), Ui.dp(12))
@@ -67,12 +94,17 @@ class PlaylistPanel(
         panel.addView(head, Ui.lin(Ui.MATCH, Ui.WRAP))
 
         rv.layoutManager = LinearLayoutManager(c)
-        rv.adapter = Ad()
+        rv.adapter = adapter
         rv.itemAnimator = null
         rv.clipToPadding = false
         rv.setPadding(0, 0, 0, Ui.dp(12))
         panel.addView(rv, Ui.lin(Ui.MATCH, 0, 1f))
         addView(panel, LayoutParams(Ui.MATCH, Ui.MATCH, if (side) Gravity.END else Gravity.BOTTOM))
+        updatePlay()
+    }
+
+    private fun updatePlay() {
+        play.visibility = if (files.any { picks.contains(it.path) }) VISIBLE else GONE
     }
 
     /** Adds the panel on top of [parent] and slides it in. */
@@ -157,6 +189,8 @@ class PlaylistPanel(
     // ---- Rows -------------------------------------------------------------------------------
 
     private inner class Row(c: Context) : LinearLayout(c) {
+        val box = SelBox(c)
+        val hit = FrameLayout(c)
         val thumb = ImageView(c)
         val name = Ui.label(c, "", 14f, Color.WHITE, false, 2)
         val dur = Ui.label(c, "", 12f, Ui.alpha(Color.WHITE, 160), false, 1)
@@ -165,11 +199,13 @@ class PlaylistPanel(
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = RecyclerView.LayoutParams(Ui.MATCH, Ui.WRAP)
-            setPadding(Ui.dp(12), Ui.dp(6), Ui.dp(12), Ui.dp(6))
+            setPadding(Ui.dp(4), Ui.dp(2), Ui.dp(12), Ui.dp(2))
+            hit.addView(box, FrameLayout.LayoutParams(Ui.dp(44), Ui.dp(56), Gravity.CENTER))
+            addView(hit, Ui.lin(Ui.dp(44), Ui.dp(56)))
             thumb.scaleType = ImageView.ScaleType.CENTER_CROP
             thumb.background = Ui.shape(0xFF2A2A2A.toInt(), 8)
             thumb.clipToOutline = true
-            addView(thumb, Ui.lin(Ui.dp(56), Ui.dp(56)))
+            addView(thumb, Ui.lin(Ui.dp(56), Ui.dp(56)).also { it.leftMargin = Ui.dp(4) })
             val col = LinearLayout(c)
             col.orientation = VERTICAL
             col.addView(name, Ui.lin(Ui.MATCH, Ui.WRAP))
@@ -192,12 +228,22 @@ class PlaylistPanel(
                     close()
                 }
             }
+            r.hit.setOnClickListener {
+                val p = h.bindingAdapterPosition
+                if (p != RecyclerView.NO_POSITION) {
+                    val path = files[p].path
+                    if (!picks.add(path)) picks.remove(path)
+                    r.box.checked = picks.contains(path)
+                    updatePlay()
+                }
+            }
             return h
         }
 
         override fun onBindViewHolder(h: VH, position: Int) {
             val r = h.v as Row
             val f = files[position]
+            r.box.checked = picks.contains(f.path)
             r.name.text = f.name
             r.name.setTextColor(if (position == current) PSlider.ACCENT else Color.WHITE)
             r.dur.text = ""
