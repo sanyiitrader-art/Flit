@@ -34,6 +34,10 @@ object Audio {
     var shuffle = false
         private set
 
+    /** True while the queue is only what the user ticked in the playlist (the library order must not replace it). */
+    var restricted = false
+        private set
+
     /** [ORDER], [ONE] (repeat one) or [ALL] (repeat whole list). */
     var mode = ORDER
         private set
@@ -113,6 +117,7 @@ object Audio {
      * playing now. That track keeps playing without a break.
      */
     fun reorder(list: List<File>) {
+        if (restricted) return
         val pl = p ?: return
         val cur = current ?: return
         val idx = list.indexOfFirst { it.path == cur.path }
@@ -124,6 +129,25 @@ object Audio {
         if (idx < list.size - 1) pl.addMediaItems(list.subList(idx + 1, list.size).map { MediaItem.fromUri(Uri.fromFile(it)) })
         files = list
         changed()
+    }
+
+    /** Plays only [list] (the ticked playlist files); shuffle and repeat then stay among them. */
+    fun playOnly(list: List<File>) {
+        if (list.isEmpty()) return
+        restricted = true
+        start(list, 0)
+    }
+
+    /** Another audio file was opened: switch to it (in the queue if it is there), staying wherever the player is. */
+    fun openTrack(path: String) {
+        val i = files.indexOfFirst { it.path == path }
+        if (active && i >= 0) {
+            jump(i)
+        } else {
+            restricted = false
+            val l = Open.siblings(path)
+            start(l, l.indexOfFirst { it.path == path }.coerceAtLeast(0))
+        }
     }
 
     fun toggle() {
@@ -190,6 +214,8 @@ object Audio {
         val pl = p ?: return
         p = null
         files = emptyList()
+        restricted = false
+        Picks.audio.clear()
         try {
             pl.release()
         } catch (e: Exception) {
