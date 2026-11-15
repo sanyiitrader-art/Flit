@@ -110,8 +110,10 @@ object Open {
         }
         when (kind(path)) {
             K_IMAGE -> a.push(ImageScreen(a, path))
-            K_VIDEO -> a.push(VideoScreen(a, path))
-            K_AUDIO -> a.push(AudioScreen(a, path))
+            // Video plays in its own Activity (it can stay in picture-in-picture while Flit is used).
+            K_VIDEO -> a.startActivity(Intent(a, PlayerActivity::class.java).putExtra(PlayerActivity.EXTRA_PATH, path))
+            // Audio already minimized: just switch to the tapped file and stay minimized.
+            K_AUDIO -> if (Audio.active && a.top() !is AudioScreen) Audio.openTrack(path) else a.push(AudioScreen(a, path))
             K_PDF -> a.push(PdfScreen(a, path))
             K_TEXT -> if (f.length() <= MAX_TEXT) a.push(TextScreen(a, path)) else external(c, path)
             K_MD -> if (f.length() <= MAX_TEXT) a.push(HtmlScreen(a, path, true)) else external(c, path)
