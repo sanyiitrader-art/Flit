@@ -33,6 +33,9 @@ class GestureLayer(c: Context) : View(c) {
         fun onAdjust(volume: Boolean, delta: Float)
         fun onAdjustEnd()
         fun locked(): Boolean
+
+        /** Long press and hold: play at 2x until released. */
+        fun onSpeedHold(on: Boolean)
     }
 
     var host: Host? = null
@@ -45,6 +48,7 @@ class GestureLayer(c: Context) : View(c) {
     private var wave = 0f
     private var textAlpha = 0f
     private var adjusting = false
+    private var holding = false
     private var adjustVolume = false
     private val slop = Ui.dpf(10)
 
@@ -85,6 +89,13 @@ class GestureLayer(c: Context) : View(c) {
 
     private val det = GestureDetector(c, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean = true
+
+        override fun onLongPress(e: MotionEvent) {
+            val h = host ?: return
+            if (h.locked() || adjusting) return
+            holding = true
+            h.onSpeedHold(true)
+        }
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             // A tap shortly after a double tap keeps seeking on that side.
@@ -135,6 +146,10 @@ class GestureLayer(c: Context) : View(c) {
             if (adjusting) {
                 adjusting = false
                 host?.onAdjustEnd()
+            }
+            if (holding) {
+                holding = false
+                host?.onSpeedHold(false)
             }
         }
         return true
