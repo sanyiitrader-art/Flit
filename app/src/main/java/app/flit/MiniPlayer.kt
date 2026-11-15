@@ -17,6 +17,8 @@ import android.widget.LinearLayout
 class MiniPlayer(private val act: MainActivity) : LinearLayout(act), Audio.Listener {
 
     private val play = ImageView(act)
+    private val row = LinearLayout(act)
+    private val titleView = android.widget.TextView(act)
     private var covered = false
     private val slop = ViewConfiguration.get(act).scaledTouchSlop
     private var downX = 0f
@@ -26,24 +28,24 @@ class MiniPlayer(private val act: MainActivity) : LinearLayout(act), Audio.Liste
     private var dragging = false
 
     init {
-        orientation = HORIZONTAL
+        orientation = VERTICAL
         gravity = Gravity.CENTER_VERTICAL
         background = Ui.shape(Ui.cSurface, 16, Ui.cBorder, 1)
         elevation = Ui.dpf(6)
         setPadding(Ui.dp(4), Ui.dp(4), Ui.dp(4), Ui.dp(4))
         visibility = GONE
 
-        addView(
+        row.addView(
             button(PIcons.get(PIcons.SQUARE, Ui.cText), 52, 14, act.getString(R.string.v_restore)) {
                 if (act.top() !is AudioScreen) act.push(AudioScreen(act, null))
             },
             Ui.lin(Ui.dp(52), Ui.dp(52))
         )
-        addView(
+        row.addView(
             button(Icons.glyph(Icons.CLOSE, Ui.cText), 40, 9, act.getString(R.string.v_close)) { Audio.stop() },
             Ui.lin(Ui.dp(40), Ui.dp(40)).also { it.leftMargin = Ui.dp(2) }
         )
-        addView(
+        row.addView(
             button(PIcons.get(PIcons.NEXT, Ui.cText), 40, 9, act.getString(R.string.v_next)) { Audio.next() },
             Ui.lin(Ui.dp(40), Ui.dp(40))
         )
@@ -51,7 +53,17 @@ class MiniPlayer(private val act: MainActivity) : LinearLayout(act), Audio.Liste
         play.background = Ui.ripple(null, 20)
         play.contentDescription = act.getString(R.string.v_play_pause)
         play.setOnClickListener { Audio.toggle() }
-        addView(play, Ui.lin(Ui.dp(40), Ui.dp(40)))
+        row.addView(play, Ui.lin(Ui.dp(40), Ui.dp(40)))
+        row.orientation = HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        titleView.textSize = 11f
+        titleView.setTextColor(Ui.cText2)
+        titleView.maxLines = 1
+        titleView.isSingleLine = true
+        titleView.ellipsize = android.text.TextUtils.TruncateAt.END
+        titleView.setPadding(Ui.dp(12), Ui.dp(4), Ui.dp(8), 0)
+        addView(titleView, Ui.lin(Ui.dp(176), Ui.WRAP))
+        addView(row, Ui.lin(Ui.WRAP, Ui.WRAP))
     }
 
     private fun button(d: android.graphics.drawable.Drawable, sizeDp: Int, padDp: Int, desc: String, onClick: () -> Unit): ImageView {
@@ -74,6 +86,7 @@ class MiniPlayer(private val act: MainActivity) : LinearLayout(act), Audio.Liste
         visibility = if (Audio.active && !covered) VISIBLE else GONE
         if (visibility == VISIBLE) post { place(savedTx, savedTy) }
         play.setImageDrawable(Icons.glyph(if (Audio.wantsPlay) Icons.PAUSE else Icons.PLAY, Ui.cText))
+        titleView.text = Audio.current?.name ?: ""
     }
 
     override fun onAudio() = refresh()
