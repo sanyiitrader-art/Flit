@@ -92,15 +92,6 @@
                 <data android:mimeType="image/heif" />
                 <data android:mimeType="image/avif" />
                 <data android:mimeType="image/svg+xml" />
-                <data android:mimeType="video/mp4" />
-                <data android:mimeType="video/3gpp" />
-                <data android:mimeType="video/3gpp2" />
-                <data android:mimeType="video/webm" />
-                <data android:mimeType="video/x-matroska" />
-                <data android:mimeType="video/quicktime" />
-                <data android:mimeType="video/mpeg" />
-                <data android:mimeType="video/mp2t" />
-                <data android:mimeType="video/mp2ts" />
                 <data android:mimeType="audio/mpeg" />
                 <data android:mimeType="audio/mp3" />
                 <data android:mimeType="audio/mp4" />
@@ -138,7 +129,6 @@
                 <data android:mimeType="*/*" />
                 <data android:pathPattern=".*\\.md" />
                 <data android:pathPattern=".*\\.markdown" />
-                <data android:pathPattern=".*\\.mkv" />
                 <data android:pathPattern=".*\\.7z" />
                 <data android:pathPattern=".*\\.rar" />
                 <data android:pathPattern=".*\\.flac" />
@@ -156,6 +146,42 @@
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- The video player: its own Activity so it can stay in picture-in-picture while Flit is used. -->
+        <activity
+            android:name=".PlayerActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:screenOrientation="portrait"
+            android:supportsPictureInPicture="true"
+            android:taskAffinity="app.flit.player">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="video/mp4" />
+                <data android:mimeType="video/3gpp" />
+                <data android:mimeType="video/3gpp2" />
+                <data android:mimeType="video/webm" />
+                <data android:mimeType="video/x-matroska" />
+                <data android:mimeType="video/quicktime" />
+                <data android:mimeType="video/mpeg" />
+                <data android:mimeType="video/mp2t" />
+                <data android:mimeType="video/mp2ts" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.mkv" />
             </intent-filter>
         </activity>
 
