@@ -2,7 +2,11 @@ package app.flit
 
 import android.animation.ObjectAnimator
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Shader
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
@@ -36,6 +40,13 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
     private var scrubbing = false
     private var alive = true
     private var playlist: PlaylistPanel? = null
+    private var art: ArtInfo? = null
+    private var fg = Ui.cText
+    private var fg2 = Ui.cText2
+    private val bgImg = ImageView(act)
+    private val dim = View(act)
+    private val vis = VisualView(act)
+    private val topBar = LinearLayout(act)
 
     /** Every audio file on the phone (for the playlist panel). */
     private var all: List<File> = emptyList()
@@ -60,7 +71,7 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
         col.orientation = LinearLayout.VERTICAL
 
         // Top bar: back, file name, playlist.
-        val top = LinearLayout(act)
+        val top = topBar
         top.orientation = LinearLayout.HORIZONTAL
         top.gravity = Gravity.CENTER_VERTICAL
         top.setPadding(Ui.dp(4), Ui.dp(4), Ui.dp(4), Ui.dp(4))
@@ -77,7 +88,11 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
 
         // The disk sits a little above the middle of the screen.
         col.addView(View(act), Ui.lin(Ui.MATCH, 0, 1f))
+        diskFrame.addView(vis, FrameLayout.LayoutParams(Ui.dp(300), Ui.dp(300), Gravity.CENTER))
         diskFrame.addView(disk, FrameLayout.LayoutParams(Ui.dp(200), Ui.dp(200), Gravity.CENTER))
+        diskFrame.clipChildren = false
+        col.clipChildren = false
+        clipChildren = false
         col.addView(diskFrame, Ui.lin(Ui.MATCH, Ui.dp(200)))
         col.addView(View(act), Ui.lin(Ui.MATCH, 0, 1.3f))
 
@@ -109,6 +124,13 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
         }
         col.addView(row, Ui.lin(Ui.MATCH, Ui.WRAP).also { it.setMargins(Ui.dp(8), Ui.dp(14), Ui.dp(8), Ui.dp(44)) })
         addView(col, LayoutParams(Ui.MATCH, Ui.MATCH))
+        // With album art: the whole screen is a deeply blurred, zoomed copy of the picture.
+        bgImg.scaleType = ImageView.ScaleType.CENTER_CROP
+        bgImg.visibility = GONE
+        addView(bgImg, 0, LayoutParams(Ui.MATCH, Ui.MATCH))
+        dim.setBackgroundColor(Ui.alpha(Color.BLACK, 120))
+        dim.visibility = GONE
+        addView(dim, 1, LayoutParams(Ui.MATCH, Ui.MATCH))
 
         seek.onStart = { scrubbing = true }
         seek.onChange = { f, user -> if (user) elapsed.text = clockText((f * Audio.duration).toLong()) }
@@ -120,6 +142,7 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
         update()
         post(ticker)
         loadLibrary()
+        loadArt()
     }
 
     private fun ctl(desc: String, sizeDp: Int, onClick: () -> Unit): ImageView {
@@ -140,6 +163,11 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
             it.width = d
             it.height = d
         }
+        vis.layoutParams = (vis.layoutParams as FrameLayout.LayoutParams).also {
+            it.width = (d * 1.8f).toInt()
+            it.height = (d * 1.8f).toInt()
+        }
+        vis.diskRadius = d / 2f
     }
 
     override fun onAttachedToWindow() {
@@ -168,19 +196,20 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
             return
         }
         update()
+        loadArt()
     }
 
     // ---- UI state ----------------------------------------------------------------------------------
 
     private fun update() {
         title.text = Audio.current?.name ?: ""
-        playBtn.setImageDrawable(Icons.glyph(if (Audio.wantsPlay) Icons.PAUSE else Icons.PLAY, Ui.cText))
-        shuffleBtn.setImageDrawable(PIcons.get(PIcons.SHUFFLE, if (Audio.shuffle) PSlider.ACCENT else Ui.cText2))
+        playBtn.setImageDrawable(Icons.glyph(if (Audio.wantsPlay) Icons.PAUSE else Icons.PLAY, fg))
+        shuffleBtn.setImageDrawable(PIcons.get(PIcons.SHUFFLE, if (Audio.shuffle) PSlider.ACCENT else fg2))
         modeBtn.setImageDrawable(
             when (Audio.mode) {
                 Audio.ONE -> PIcons.get(PIcons.REPEAT_ONE, PSlider.ACCENT)
                 Audio.ALL -> PIcons.get(PIcons.REPEAT, PSlider.ACCENT)
-                else -> PIcons.get(PIcons.REPEAT, Ui.cText2) // Order: plain, no repeat
+                else -> PIcons.get(PIcons.REPEAT, fg2) // Order: plain, no repeat
             }
         )
         if (Audio.playing) {
@@ -188,6 +217,36 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
         } else if (spin.isRunning && !spin.isPaused) {
             spin.pause()
         }
+    }
+
+    private fun loadArt() {
+        val p = Audio.current?.path ?: return
+        Art.load(p) { a -> if (alive && Audio.current?.path == p) applyArt(a) }
+    }
+
+    /** The track's picture: blurred background, the picture as the spinning disk, and its main colour for the visualizer. */
+    private fun applyArt(a: ArtInfo?) {
+        if (art === a) return
+        art = a
+        if (a != null) {
+            bgImg.setImageBitmap(a.blur)
+            bgImg.visibility = VISIBLE
+            dim.visibility = VISIBLE
+        } else {
+            bgImg.visibility = GONE
+            dim.visibility = GONE
+        }
+        disk.art = a?.bmp
+        vis.color = a?.color ?: PSlider.ACCENT
+        fg = if (a != null) Color.WHITE else Ui.cText
+        fg2 = if (a != null) Ui.alpha(Color.WHITE, 170) else Ui.cText2
+        title.setTextColor(fg)
+        elapsed.setTextColor(fg2)
+        total.setTextColor(fg2)
+        for (i in intArrayOf(0, 2)) {
+            (topBar.getChildAt(i) as? ImageView)?.let { if (a != null) it.setColorFilter(Color.WHITE) else it.clearColorFilter() }
+        }
+        update()
     }
 
     private fun tick() {
@@ -252,26 +311,51 @@ class AudioScreen(act: MainActivity, path: String?) : Screen(act), Audio.Listene
 
     private class DiskView(c: Context) : View(c) {
 
-        private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        /** The track's picture, cropped to the disk (it spins with it). */
+        var art: Bitmap? = null
+            set(v) {
+                field = v
+                invalidate()
+            }
+
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
         override fun onDraw(c: Canvas) {
             val cx = width / 2f
             val cy = height / 2f
             val r = min(width, height) / 2f
+            val a = art
+            if (a != null) {
+                val sh = BitmapShader(a, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+                val m = Matrix()
+                val s = maxOf(2f * r / a.width, 2f * r / a.height)
+                m.setScale(s, s)
+                m.postTranslate(cx - a.width * s / 2f, cy - a.height * s / 2f)
+                sh.setLocalMatrix(m)
+                p.style = Paint.Style.FILL
+                p.shader = sh
+                c.drawCircle(cx, cy, r, p)
+                p.shader = null
+                p.style = Paint.Style.STROKE
+                p.strokeWidth = Ui.dpf(3)
+                p.color = Ui.alpha(Color.BLACK, 140)
+                c.drawCircle(cx, cy, r - Ui.dpf(1.5f), p)
+                p.style = Paint.Style.FILL
+                p.color = Ui.alpha(Color.BLACK, 200)
+                c.drawCircle(cx, cy, r * 0.07f, p)
+                return
+            }
             p.style = Paint.Style.FILL
             p.color = Color.BLACK
             c.drawCircle(cx, cy, r, p)
-            // Grooves.
             p.style = Paint.Style.STROKE
             p.strokeWidth = Ui.dpf(1)
             p.color = Ui.alpha(Color.WHITE, 22)
             for (i in 1..5) c.drawCircle(cx, cy, r * (0.40f + 0.105f * i), p)
-            // A bright arc on the rim, so the turning is visible.
             p.strokeWidth = Ui.dpf(3)
             p.color = Ui.alpha(Color.WHITE, 60)
             val inset = Ui.dpf(5)
             c.drawArc(RectF(cx - r + inset, cy - r + inset, cx + r - inset, cy + r - inset), -70f, 40f, false, p)
-            // Centre label and spindle hole.
             p.style = Paint.Style.FILL
             p.color = PSlider.ACCENT
             c.drawCircle(cx, cy, r * 0.30f, p)
