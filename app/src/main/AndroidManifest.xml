@@ -157,8 +157,7 @@
             android:launchMode="singleTask"
             android:resizeableActivity="true"
             android:screenOrientation="portrait"
-            android:supportsPictureInPicture="true"
-            android:taskAffinity="app.flit.player">
+            android:supportsPictureInPicture="true">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
