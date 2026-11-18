@@ -235,7 +235,7 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
             val safe = Chunks.safeRel(m.rel)
             if (j > i + 1 && m.type != TYPE_PART && safe.contains('/')) {
                 // A split-APK app: all its files go into one unique folder and are shown as one entry.
-                val dir = Chunks.reserve(safe.substringBefore('/'))
+                val dir = Chunks.reserve(safe.substringBefore('/'), "Apps")
                 val members = ArrayList<RxFile>(j - i)
                 for (k in i until j) {
                     val mk = fixed(manifest[k])
@@ -251,7 +251,7 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
                 rl.add(RxRow(members[0], members.subList(1, members.size).toList(), dir))
                 i = j
             } else {
-                val dest = Chunks.reserve(m.rel)
+                val dest = Chunks.reserve(m.rel, Chunks.categoryOf(m.rel))
                 val key = Chunks.key(peer.id, m.rel, m.size, m.mtime)
                 val rf = RxFile(m, dest, File(pd, "$key.part"), key)
                 list.add(rf)
@@ -687,7 +687,6 @@ class RxSession(val peer: Peer, val id: String, val count: Int, val total: Long,
         var failed = 0
         val now = System.currentTimeMillis()
         val from = peer.name
-        peer.avatar?.let { av -> Files.pool.execute { PeerAvatars.save(from, av) } }
         for (row in rows) {
             val s = row.state()
             if (s == RecvFile.DONE) done++ else if (s == RecvFile.FAILED) failed++
