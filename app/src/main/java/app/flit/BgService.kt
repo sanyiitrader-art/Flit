@@ -7,6 +7,11 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.drawable.Icon
 import android.media.MediaMetadata
 import android.media.session.MediaSession
@@ -106,11 +111,15 @@ object MediaHub {
         val playing = if (aud) Audio.wantsPlay else VBg.playing
         val pos = if (aud) Audio.position else VBg.pos()
         val dur = if (aud) Audio.duration else VBg.dur()
+        val path = if (aud) Audio.current?.path else null
+        val art = path?.let { Art.peek(it) }
+        if (path != null && art == null) Art.load(path) { if (it != null) BgService.update() }
         m.setMetadata(
             MediaMetadata.Builder()
                 .putString(MediaMetadata.METADATA_KEY_TITLE, name)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, c.getString(R.string.app_name))
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, dur)
+                .also { b -> if (art != null) b.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, art.bmp) }
                 .build()
         )
         m.setPlaybackState(
@@ -164,7 +173,7 @@ class BgService : Service() {
         val aud = Audio.active || VBg.active
         val ext = Extractor.running
         val nm = getSystemService(NotificationManager::class.java)
-        if (aud) MediaHub.update(this)
+        if (aud) try { MediaHub.update(this) } catch (e: Exception) {}
         if (!aud && !ext) {
             try {
                 startForeground(ID_AUDIO, audioNotification()) // satisfies startForegroundService, then goes away
@@ -219,7 +228,27 @@ class BgService : Service() {
         return b
     }
 
-    private fun audioNotification(): Notification {
+    private fun fallbackIcon(): Bitmap {
+        val s = 128
+        val b = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888)
+        val c = Canvas(b)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.color = PSlider.ACCENT
+        c.drawRoundRect(RectF(0f, 0f, s.toFloat(), s.toFloat()), 24f, 24f, p)
+        val d = Icons.glyph(Icons.NOTE, Color.WHITE)
+        d.setBounds(28, 28, s - 28, s - 28)
+        d.draw(c)
+        return b
+    }
+
+    private fun audioNotification(): Notification = try {
+        mediaNotification()
+    } catch (e: Exception) {
+        base().setContentTitle(getString(R.string.app_name)).setContentIntent(open(0, false)).build()
+    }
+
+    private fun mediaNotification(): Notification {
+        val art = if (Audio.active) Audio.current?.path?.let { Art.peek(it) } else null
         val playing = if (Audio.active) Audio.wantsPlay else VBg.playing
         val name = if (Audio.active) Audio.current?.name else VBg.name
         fun act(icon: Int, label: Int, code: Int, a: String) =
@@ -230,6 +259,9 @@ class BgService : Service() {
             .setContentIntent(open(0, false))
             .setCategory(Notification.CATEGORY_TRANSPORT)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setLargeIcon(art?.bmp ?: fallbackIcon())
+            .setColor(art?.color ?: PSlider.ACCENT)
+            .setColorized(true)
             .addAction(act(android.R.drawable.ic_media_previous, R.string.v_prev, 5, ACT_PREV))
             .addAction(act(if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play, R.string.v_play_pause, 1, ACT_TOGGLE))
             .addAction(act(android.R.drawable.ic_media_next, R.string.v_next, 6, ACT_NEXT))
