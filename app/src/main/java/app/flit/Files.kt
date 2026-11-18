@@ -385,7 +385,7 @@ object Files {
             }
         } catch (e: Exception) {
         }
-        for (dir in listOf(File(root, "Download"), File(root, "Download/Flit"))) {
+        for (dir in listOf(File(root, "Download"), File(root, "Flit/Apps"))) {
             val kids = dir.listFiles() ?: continue
             for (f in kids) {
                 if (isSplitName(f.name)) continue
