@@ -116,7 +116,22 @@ object Chunks {
 
     // ---- Receive folder --------------------------------------------------------------------
 
-    fun recvRoot(): File = File(Files.root, "Download/Flit")
+    fun recvRoot(): File = File(Files.root, "Flit")
+
+    /** The category folder a received file goes to (created only when a file for it arrives). */
+    fun categoryOf(rel: String): String {
+        if (rel.contains('/')) return "Folders"
+        val e = rel.substringAfterLast('.', "").lowercase()
+        return when (e) {
+            "apk", "apks", "xapk" -> "Apps"
+            "jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif", "avif", "svg", "tif", "tiff" -> "Images"
+            "mp4", "m4v", "mov", "3gp", "mkv", "webm", "avi", "wmv", "flv", "mpg", "mpeg", "ts" -> "Videos"
+            "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "amr", "wma", "aiff", "mka" -> "Audio"
+            "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz" -> "Archives"
+            "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "rtf", "odt", "ods", "odp", "csv", "html", "htm", "epub" -> "Documents"
+            else -> "Other"
+        }
+    }
 
     /** Hidden folder for unfinished files (with .nomedia so galleries ignore it). */
     fun partialDir(): File {
@@ -150,13 +165,14 @@ object Chunks {
      * file of the running transfers: "photo.jpg", then "photo (1).jpg", "photo (2).jpg" ...
      */
     @Synchronized
-    fun reserve(rel: String): File {
-        val first = File(recvRoot(), safeRel(rel))
+    fun reserve(rel: String, cat: String = ""): File {
+        val base = if (cat.isEmpty()) recvRoot() else File(recvRoot(), cat)
+        val first = File(base, safeRel(rel))
         if (!taken(first)) {
             reserved.add(first.path)
             return first
         }
-        val dir = first.parentFile ?: recvRoot()
+        val dir = first.parentFile ?: base
         val name = first.name
         val dot = name.lastIndexOf('.')
         val base = if (dot > 0) name.substring(0, dot) else name
