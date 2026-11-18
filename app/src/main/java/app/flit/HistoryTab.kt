@@ -24,7 +24,7 @@ import java.io.File
  *
  * Live updates: while the tab is on screen it re-checks the files when MediaStore reports a change,
  * when an app is installed or removed (INSTALLED badge), and when anything changes inside
- * Download/Flit (where received files are saved). Other locations are re-checked whenever the tab
+ * Flit (where received files are saved). Other locations are re-checked whenever the tab
  * is shown.
  */
 class HistoryTab(c: Context) : LinearLayout(c), Live {
@@ -112,7 +112,7 @@ class HistoryTab(c: Context) : LinearLayout(c), Live {
     private fun watchFlit() {
         obs?.stopWatching()
         obs = null
-        val d = File(Files.root, "Download/Flit")
+        val d = File(Files.root, "Flit")
         if (!d.isDirectory || !Perms.hasStorage()) return
         val o = object : FileObserver(d.path, MASK) {
             override fun onEvent(event: Int, name: String?) {
