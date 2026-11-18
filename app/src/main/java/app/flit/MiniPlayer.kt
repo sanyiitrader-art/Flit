@@ -1,5 +1,6 @@
 package app.flit
 
+import android.graphics.Color
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -18,6 +19,7 @@ class MiniPlayer(private val act: MainActivity) : LinearLayout(act), Audio.Liste
 
     private val play = ImageView(act)
     private val row = LinearLayout(act)
+    private var artPath = ""
     private val titleView = android.widget.TextView(act)
     private var covered = false
     private val slop = ViewConfiguration.get(act).scaledTouchSlop
@@ -87,9 +89,31 @@ class MiniPlayer(private val act: MainActivity) : LinearLayout(act), Audio.Liste
         if (visibility == VISIBLE) post { place(savedTx, savedTy) }
         play.setImageDrawable(Icons.glyph(if (Audio.wantsPlay) Icons.PAUSE else Icons.PLAY, Ui.cText))
         titleView.text = Audio.current?.name ?: ""
+        loadArt()
     }
 
     override fun onAudio() = refresh()
+
+    private fun loadArt() {
+        val p = Audio.current?.path ?: return
+        if (p == artPath) return
+        artPath = p
+        Art.load(p) { a -> if (Audio.current?.path == p) applyArt(a) }
+    }
+
+    /** Track with a picture: the bar gets a blurred copy of it as background and white icons. */
+    private fun applyArt(a: ArtInfo?) {
+        if (a != null) {
+            background = ArtBg(a.blur, Ui.dpf(16))
+            titleView.setTextColor(Ui.alpha(Color.WHITE, 210))
+        } else {
+            background = Ui.shape(Ui.cSurface, 16, Ui.cBorder, 1)
+            titleView.setTextColor(Ui.cText2)
+        }
+        for (i in 0 until row.childCount) {
+            (row.getChildAt(i) as? ImageView)?.let { if (a != null) it.setColorFilter(Color.WHITE) else it.clearColorFilter() }
+        }
+    }
 
     // ---- Dragging ----------------------------------------------------------------------------
 
