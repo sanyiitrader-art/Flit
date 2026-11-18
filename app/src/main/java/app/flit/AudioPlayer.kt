@@ -73,9 +73,31 @@ object Audio {
         BgService.update()
     }
 
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun build(): ExoPlayer {
+        try {
+            // The visualizer listens inside the player's own audio pipeline (no permission needed).
+            val factory = object : androidx.media3.exoplayer.DefaultRenderersFactory(FlitApp.app) {
+                override fun buildAudioSink(
+                    context: android.content.Context,
+                    enableFloatOutput: Boolean,
+                    enableAudioTrackPlaybackParams: Boolean
+                ): androidx.media3.exoplayer.audio.AudioSink? =
+                    androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                        .setEnableFloatOutput(false)
+                        .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                        .setAudioProcessors(arrayOf<androidx.media3.common.audio.AudioProcessor>(Spectrum.levels))
+                        .build()
+            }
+            return ExoPlayer.Builder(FlitApp.app, factory).build()
+        } catch (e: Throwable) {
+            return ExoPlayer.Builder(FlitApp.app).build()
+        }
+    }
+
     private fun ensure(): ExoPlayer {
         p?.let { return it }
-        val pl = ExoPlayer.Builder(FlitApp.app).build()
+        val pl = build()
         pl.setAudioAttributes(
             AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true
         )
