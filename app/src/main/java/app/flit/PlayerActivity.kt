@@ -12,6 +12,14 @@ class PlayerActivity : MainActivity() {
 
     override val isMain: Boolean get() = false
 
+    /** Opened from another app ("Open with"): closing returns to that app. */
+    private var external = false
+
+    override fun finish() {
+        if (external && !isFinishing) moveTaskToBack(true)
+        super.finish()
+    }
+
     override fun handleGo(i: Intent?) {
         if (i == null) return
         val p = i.getStringExtra(EXTRA_PATH)
@@ -20,6 +28,7 @@ class PlayerActivity : MainActivity() {
             return
         }
         val uri = i.data ?: return
+        external = true
         val type = i.type
         val app = applicationContext
         Files.pool.execute {
